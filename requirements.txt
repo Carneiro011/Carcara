@@ -1,0 +1,8 @@
+# Projeto CARCARÁ — Django Edition
+django>=5.0
+djangorestframework>=3.15
+django-cors-headers>=4.3
+psycopg2-binary>=2.9
+numpy>=1.26
+pyproj>=3.6
+python-dotenv>=1.0
