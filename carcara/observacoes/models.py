@@ -141,22 +141,59 @@ class ConfiguracaoSistema(models.Model):
     """
     Configurações globais do sistema (singleton).
     Use ConfiguracaoSistema.get() para obter a instância única.
+
+    Lógica de confiança (avaliada em ordem, primeira que satisfizer vence):
+      ALTO  → n_obs >= min_obs_alto  E  residuo <= residuo_alto_m  E  dist_media <= dist_alto_m
+      MÉDIO → n_obs >= min_obs_medio E  angulo >= angulo_min_graus  E  residuo <= residuo_medio_m
+      BAIXO → qualquer outro caso
     """
-    raio_espacial_km       = models.FloatField(
+
+    # ── Agrupamento ───────────────────────────────────────────────────────────
+    raio_espacial_km = models.FloatField(
         default=3.0,
         help_text="Raio máximo (km) para agrupar observações no espaço.",
     )
+
+    # ── Raios exibidos no mapa ────────────────────────────────────────────────
     raio_confianca_alto_m  = models.FloatField(
         default=500.0,
-        help_text="Raio (m) de confiança exibido no mapa para focos de nível ALTO.",
+        help_text="Raio (m) exibido no mapa para focos de nível ALTO.",
     )
     raio_confianca_medio_m = models.FloatField(
         default=1500.0,
-        help_text="Raio (m) de confiança exibido no mapa para focos de nível MÉDIO.",
+        help_text="Raio (m) exibido no mapa para focos de nível MÉDIO.",
     )
     raio_confianca_baixo_m = models.FloatField(
         default=3000.0,
-        help_text="Raio (m) de confiança exibido no mapa para focos de nível BAIXO.",
+        help_text="Raio (m) exibido no mapa para focos de nível BAIXO.",
+    )
+
+    # ── Parâmetros de confiança ALTO ──────────────────────────────────────────
+    min_obs_alto = models.IntegerField(
+        default=3,
+        help_text="Número mínimo de observadores para atingir confiança ALTA.",
+    )
+    residuo_alto_m = models.FloatField(
+        default=500.0,
+        help_text="Resíduo máximo (m) permitido para confiança ALTA.",
+    )
+    dist_media_alto_m = models.FloatField(
+        default=5000.0,
+        help_text="Distância média máxima (m) dos observadores ao foco para confiança ALTA.",
+    )
+
+    # ── Parâmetros de confiança MÉDIO ─────────────────────────────────────────
+    min_obs_medio = models.IntegerField(
+        default=2,
+        help_text="Número mínimo de observadores para atingir confiança MÉDIA.",
+    )
+    angulo_min_graus = models.FloatField(
+        default=15.0,
+        help_text="Ângulo mínimo (graus) entre visadas para confiança MÉDIA.",
+    )
+    residuo_medio_m = models.FloatField(
+        default=500.0,
+        help_text="Resíduo máximo (m) permitido para confiança MÉDIA.",
     )
 
     class Meta:

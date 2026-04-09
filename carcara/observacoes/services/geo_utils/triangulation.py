@@ -125,13 +125,16 @@ def _distancia_por_elevacao(elevacao_graus: float,
     return dh / tan_phi
 
 
-def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao:
+def triangular(observacoes: list[ObservacaoProcessada],
+               config=None) -> ResultadoTriangulacao:
     """
     Executa a triangulação de um conjunto de observações e retorna o
     ponto estimado do foco de incêndio com métricas de qualidade.
 
     Args:
         observacoes: lista com pelo menos 1 ObservacaoProcessada
+        config: instância de ConfiguracaoSistema com os parâmetros de confiança.
+                Se None, carrega automaticamente do banco.
 
     Returns:
         ResultadoTriangulacao com localização e métricas
@@ -142,6 +145,11 @@ def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao
     if not observacoes:
         raise ValueError("Lista de observações está vazia.")
 
+    # Carrega configurações se não foram passadas
+    if config is None:
+        from observacoes.models import ConfiguracaoSistema
+        config = ConfiguracaoSistema.get()
+
     n = len(observacoes)
 
     # ── Passo 1: converter azimutes em vetores unitários ─────────────────────
@@ -151,7 +159,6 @@ def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao
     # ── Passo 2: estimativa do foco ──────────────────────────────────────────
     if n == 1:
         # Apenas uma observação: sem triangulação possível.
-        # Estimativa usando ângulo de elevação (se disponível) ou distância padrão.
         obs = observacoes[0]
         dist_elev = _distancia_por_elevacao(obs.elevacao)
         dist = dist_elev if dist_elev else 2000.0  # 2 km como fallback
@@ -159,30 +166,21 @@ def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao
         dx, dy = bearing_vector(obs.azimute)
         x_foco = obs.x + dist * dx
         y_foco = obs.y + dist * dy
-        nivel = "baixo"
         residuo = 0.0
 
     else:
         # N ≥ 2: mínimos quadrados por interseção de retas
-        #
-        # Para cada reta i com origem O_i e direção d_i:
-        #   M_i = I - d_i * d_iᵀ  (matriz de projeção perpendicular)
-        #
-        # Sistema:  A · P = b
-        #   A = Σ M_i
-        #   b = Σ M_i · O_i
-
         A = np.zeros((2, 2))
         b = np.zeros(2)
 
         for i in range(n):
-            d = vetores[i].reshape(2, 1)          # coluna
-            M = np.eye(2) - d @ d.T               # matriz 2×2
+            d = vetores[i].reshape(2, 1)
+            M = np.eye(2) - d @ d.T
             A += M
             b += M @ pontos[i]
 
         try:
-            ponto_foco = np.linalg.solve(A, b)    # solução do sistema linear
+            ponto_foco = np.linalg.solve(A, b)
         except np.linalg.LinAlgError:
             raise ValueError(
                 "Sistema singular: as linhas de visão são paralelas "
@@ -190,27 +188,13 @@ def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao
             )
 
         x_foco, y_foco = ponto_foco
-        nivel = "medio" if n == 2 else "alto"
 
-        # Penaliza geometria ruim (ângulo de interseção muito pequeno)
-        if n == 2:
-            angulo = _angulo_entre_vetores(vetores[0], vetores[1])
-            if angulo < 15:  # menos de 15° → geometria fraca
-                nivel = "baixo"
-            elif angulo >= 30:
-                nivel = "medio"
-
-        # Resíduo: distância perpendicular média das retas ao ponto estimado
         residuo = float(np.mean([
             _distancia_ponto_a_reta(x_foco, y_foco,
                                     pontos[i][0], pontos[i][1],
                                     vetores[i][0], vetores[i][1])
             for i in range(n)
         ]))
-
-        # Degrada confiança se resíduo for alto
-        if residuo > 500:   # > 500 m de erro médio
-            nivel = "baixo" if nivel == "medio" else "medio"
 
     # ── Passo 3: distâncias individuais ──────────────────────────────────────
     detalhes = []
@@ -221,16 +205,53 @@ def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao
         dist_elev = _distancia_por_elevacao(obs.elevacao)
         distancias.append(dist_obs)
         detalhes.append({
-            "obs_id":           obs.id,
-            "usuario_id":       obs.usuario_id,
-            "distancia_m":      round(dist_obs, 1),
-            "dist_elevacao_m":  round(dist_elev, 1) if dist_elev else None,
-            "foto_url":         obs.foto_url,
+            "obs_id":          obs.id,
+            "usuario_id":      obs.usuario_id,
+            "distancia_m":     round(dist_obs, 1),
+            "dist_elevacao_m": round(dist_elev, 1) if dist_elev else None,
+            "foto_url":        obs.foto_url,
         })
 
     distancia_media = float(np.mean(distancias))
 
-    # ── Passo 4: distância média via elevação (quando disponível) ────────────
+    # ── Passo 4: ângulo mínimo entre visadas (para N ≥ 2) ───────────────────
+    angulo_min = 0.0
+    if n >= 2:
+        angulos = [
+            _angulo_entre_vetores(vetores[i], vetores[j])
+            for i in range(n) for j in range(i + 1, n)
+        ]
+        angulo_min = min(angulos)
+
+    # ── Passo 5: classificação de confiança (parametrizada) ──────────────────
+    #
+    # ALTO  → n >= min_obs_alto  E  residuo <= residuo_alto_m
+    #                             E  dist_media <= dist_media_alto_m
+    # MÉDIO → n >= min_obs_medio E  angulo >= angulo_min_graus
+    #                             E  residuo <= residuo_medio_m
+    # BAIXO → qualquer outro caso
+    #
+    if (
+        n >= config.min_obs_alto
+        and residuo <= config.residuo_alto_m
+        and distancia_media <= config.dist_media_alto_m
+    ):
+        nivel = "alto"
+    elif (
+        n >= config.min_obs_medio
+        and angulo_min >= config.angulo_min_graus
+        and residuo <= config.residuo_medio_m
+    ):
+        nivel = "medio"
+    else:
+        nivel = "baixo"
+
+    logger.debug(
+        "Confiança=%s | n=%d | resíduo=%.1fm | dist_media=%.1fm | ângulo_min=%.1f°",
+        nivel, n, residuo, distancia_media, angulo_min,
+    )
+
+    # ── Passo 6: distância média via elevação (quando disponível) ────────────
     elev_dists = [
         _distancia_por_elevacao(o.elevacao)
         for o in observacoes
@@ -238,20 +259,8 @@ def triangular(observacoes: list[ObservacaoProcessada]) -> ResultadoTriangulacao
     ]
     dist_elevacao_media = float(np.mean(elev_dists)) if elev_dists else None
 
-    # ── Passo 5: converter resultado de volta para lat/lon ───────────────────
-    # Usa CRS da primeira observação como referência (todas devem ser próximas)
+    # ── Passo 7: converter resultado de volta para lat/lon ───────────────────
     ref_obs = observacoes[0]
-
-    # Recuperamos o CRS UTM a partir de uma observação original (lat/lon)
-    # Para isso precisamos da lat/lon original — usamos aproximação reversa
-    # O CRS foi calculado na etapa de pré-processamento e deve ser passado.
-    # Aqui criamos um transformer temporário com as coordenadas do centroide.
-    centroide_x = float(np.mean([o.x for o in observacoes]))
-    centroide_y = float(np.mean([o.y for o in observacoes]))
-
-    # Usamos o CRS que foi determinado durante a conversão (armazenado nas obs)
-    # Como as observações já estão em UTM, precisamos do CRS para reverter.
-    # Passamos o CRS via atributo extra da ObservacaoProcessada (adicionado abaixo).
     crs_utm = getattr(ref_obs, '_crs_utm', None)
     if crs_utm is None:
         raise ValueError("CRS UTM não encontrado nas observações processadas.")

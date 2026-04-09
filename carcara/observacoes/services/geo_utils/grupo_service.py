@@ -61,7 +61,7 @@ def processar_grupo_async(grupo_id: int):
         ]
 
         obs_processadas = preparar_observacoes(obs_raw)
-        resultado = triangular(obs_processadas)
+        resultado = triangular(obs_processadas, config=ConfiguracaoSistema.get())
 
         # Remove foco antigo antes de criar novo
         FocoEstimado.objects.filter(grupo_id=grupo_id).delete()

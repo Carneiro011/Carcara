@@ -110,10 +110,49 @@ class RelatorioSerializer(serializers.ModelSerializer):
 
 
 class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
+    # ── Agrupamento ───────────────────────────────────────────────────────────
     raio_espacial_km = serializers.FloatField(
-        min_value=0.1,
-        max_value=50.0,
-        help_text="Raio de agrupamento espacial em km (0.1 – 50 km).",
+        min_value=0.1, max_value=50.0,
+        help_text="Raio de agrupamento espacial em km (0.1–50).",
+    )
+
+    # ── Raios do mapa ─────────────────────────────────────────────────────────
+    raio_confianca_alto_m = serializers.FloatField(
+        min_value=50.0, max_value=50000.0,
+    )
+    raio_confianca_medio_m = serializers.FloatField(
+        min_value=50.0, max_value=50000.0,
+    )
+    raio_confianca_baixo_m = serializers.FloatField(
+        min_value=50.0, max_value=50000.0,
+    )
+
+    # ── Confiança ALTO ────────────────────────────────────────────────────────
+    min_obs_alto = serializers.IntegerField(
+        min_value=1, max_value=100,
+        help_text="Mínimo de observadores para confiança ALTA.",
+    )
+    residuo_alto_m = serializers.FloatField(
+        min_value=10.0, max_value=10000.0,
+        help_text="Resíduo máximo (m) para confiança ALTA.",
+    )
+    dist_media_alto_m = serializers.FloatField(
+        min_value=100.0, max_value=100000.0,
+        help_text="Distância média máxima (m) ao foco para confiança ALTA.",
+    )
+
+    # ── Confiança MÉDIO ───────────────────────────────────────────────────────
+    min_obs_medio = serializers.IntegerField(
+        min_value=1, max_value=100,
+        help_text="Mínimo de observadores para confiança MÉDIA.",
+    )
+    angulo_min_graus = serializers.FloatField(
+        min_value=1.0, max_value=90.0,
+        help_text="Ângulo mínimo entre visadas (graus) para confiança MÉDIA.",
+    )
+    residuo_medio_m = serializers.FloatField(
+        min_value=10.0, max_value=10000.0,
+        help_text="Resíduo máximo (m) para confiança MÉDIA.",
     )
 
     class Meta:
@@ -123,4 +162,20 @@ class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
             "raio_confianca_alto_m",
             "raio_confianca_medio_m",
             "raio_confianca_baixo_m",
+            "min_obs_alto",
+            "residuo_alto_m",
+            "dist_media_alto_m",
+            "min_obs_medio",
+            "angulo_min_graus",
+            "residuo_medio_m",
         ]
+
+    def validate(self, data):
+        # min_obs_alto deve ser >= min_obs_medio
+        alto  = data.get("min_obs_alto",  self.instance.min_obs_alto  if self.instance else 3)
+        medio = data.get("min_obs_medio", self.instance.min_obs_medio if self.instance else 2)
+        if alto < medio:
+            raise serializers.ValidationError(
+                {"min_obs_alto": "min_obs_alto deve ser >= min_obs_medio."}
+            )
+        return data
