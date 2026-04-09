@@ -106,7 +106,8 @@ MAP_HTML = """<!DOCTYPE html>
 <script>
 const map = L.map('map').setView([-10.89, -37.06], 10);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap', maxZoom: 19
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19
 }).addTo(map);
 
 const camadas = {

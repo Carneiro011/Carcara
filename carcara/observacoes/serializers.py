@@ -5,7 +5,7 @@ Responsáveis por validar entrada (POST) e formatar saída (GET).
 """
 
 from rest_framework import serializers
-from .models import Observacao, Grupo, FocoEstimado, Relatorio
+from .models import Observacao, Grupo, FocoEstimado, Relatorio, ConfiguracaoSistema
 
 
 # ── Entrada ───────────────────────────────────────────────────────────────────
@@ -107,3 +107,20 @@ class RelatorioSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Relatorio
         fields = ["id", "foco_id", "conteudo_json", "gerado_em", "enviado"]
+
+
+class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
+    raio_espacial_km = serializers.FloatField(
+        min_value=0.1,
+        max_value=50.0,
+        help_text="Raio de agrupamento espacial em km (0.1 – 50 km).",
+    )
+
+    class Meta:
+        model  = ConfiguracaoSistema
+        fields = [
+            "raio_espacial_km",
+            "raio_confianca_alto_m",
+            "raio_confianca_medio_m",
+            "raio_confianca_baixo_m",
+        ]

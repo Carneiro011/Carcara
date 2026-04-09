@@ -39,6 +39,13 @@ from observacoes.services.geo_utils.grupo_service import (
 logger = logging.getLogger("carcara")
 
 
+class _IsStaffOrAdmin(permissions.BasePermission):
+    """Permite acesso a qualquer usuário com is_staff=True ou is_superuser=True."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and (request.user.is_staff or request.user.is_superuser))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Configurações do Sistema  [somente staff]
 # ══════════════════════════════════════════════════════════════════════════════
@@ -46,13 +53,13 @@ logger = logging.getLogger("carcara")
 class ConfiguracaoSistemaView(APIView):
     """
     GET  /api/configuracoes/   → visualizar configurações      [autenticado]
-    PATCH /api/configuracoes/  → alterar configurações         [somente staff]
+    PATCH /api/configuracoes/  → alterar configurações         [staff ou admin]
     """
 
     def get_permissions(self):
         if self.request.method == "GET":
             return [permissions.IsAuthenticated()]
-        return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated(), _IsStaffOrAdmin()]
 
     def get(self, request):
         config = ConfiguracaoSistema.get()
@@ -184,7 +191,7 @@ class GrupoViewSet(viewsets.ViewSet):
         detail=True,
         methods=["post"],
         url_path="processar",
-        permission_classes=[permissions.IsAdminUser],
+        permission_classes=[_IsStaffOrAdmin],
     )
     def reprocessar(self, request, pk=None):
         """

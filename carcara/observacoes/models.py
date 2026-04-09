@@ -137,6 +137,42 @@ class FocoEstimado(models.Model):
         )
 
 
+class ConfiguracaoSistema(models.Model):
+    """
+    Configurações globais do sistema (singleton).
+    Use ConfiguracaoSistema.get() para obter a instância única.
+    """
+    raio_espacial_km       = models.FloatField(
+        default=3.0,
+        help_text="Raio máximo (km) para agrupar observações no espaço.",
+    )
+    raio_confianca_alto_m  = models.FloatField(
+        default=500.0,
+        help_text="Raio (m) de confiança exibido no mapa para focos de nível ALTO.",
+    )
+    raio_confianca_medio_m = models.FloatField(
+        default=1500.0,
+        help_text="Raio (m) de confiança exibido no mapa para focos de nível MÉDIO.",
+    )
+    raio_confianca_baixo_m = models.FloatField(
+        default=3000.0,
+        help_text="Raio (m) de confiança exibido no mapa para focos de nível BAIXO.",
+    )
+
+    class Meta:
+        verbose_name        = "Configuração do Sistema"
+        verbose_name_plural = "Configurações do Sistema"
+
+    def __str__(self):
+        return "Configurações do Sistema"
+
+    @classmethod
+    def get(cls):
+        """Retorna a instância singleton, criando-a com valores padrão se necessário."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class Relatorio(models.Model):
     """
     Relatório final consolidado de um foco estimado.
