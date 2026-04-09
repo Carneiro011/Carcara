@@ -23,19 +23,21 @@ carcara/
 │   ├── urls.py
 │   └── admin.py
 ├── observacoes/                     ← App principal
-│   ├── models.py                    ← Observacao, Grupo, FocoEstimado, Relatorio
-│   ├── serializers.py
+│   ├── models.py          ✏️        ← Observacao, Grupo, FocoEstimado, Relatorio
+│   ├── serializers.py     ✏️
 │   ├── views.py
 │   ├── urls.py
 │   ├── mapa.py                      ← Visualização Leaflet
 │   └── services/
 │       └── geo_utils/
-│           ├── grupo_service.py     ← Agrupamento espaço-temporal
+│           ├── grupo_service.py ✏️  ← Agrupamento + média de severidade
 │           └── triangulation.py    ← Algoritmo de triangulação (mínimos quadrados)
 └── carcara/                         ← Configurações do projeto
     ├── settings.py
     └── urls.py
 ```
+
+> ✏️ Arquivos alterados na última atualização — ver seção **Arquivos Alterados** abaixo.
 
 ---
 
@@ -92,20 +94,19 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:8000
 ## Modelo do Banco de Dados
 
 ```
-observacoes            grupos              focos_estimados          relatorios
-─────────────────      ──────────────      ────────────────────     ──────────────
-id (PK)                id (PK)             id (PK)                  id (PK)
-usuario_id             status              grupo_id (FK)            foco_id (FK)
-timestamp              criado_em           lat_foco                 conteudo_json
-lat                    atualizado_em       lon_foco                 gerado_em
-lon                                        distancia_media_m        enviado
-azimute                                    residuo_medio_m
-pitch                                      n_observacoes
-elevacao                                   nivel_confianca
-precisao_gps                               distancia_elevacao_m
-photo_url                                  calculado_em
-occurrence_type
-severity_level
+observacoes              grupos                 focos_estimados          relatorios
+─────────────────────    ──────────────────     ────────────────────     ──────────────
+id (PK)                  id (PK)                id (PK)                  id (PK)
+usuario_id               status                 grupo_id (FK)            foco_id (FK)
+timestamp                severity_media ← novo  lat_foco                 conteudo_json
+lat                      criado_em              lon_foco                 gerado_em
+lon                      atualizado_em          distancia_media_m        enviado
+azimute                                         residuo_medio_m
+elevacao                                        n_observacoes
+precisao_gps                                    nivel_confianca
+foto_url                                        distancia_elevacao_m
+occurrence_type                                 calculado_em
+severity_level ← novo
 description
 grupo_id (FK)
 criado_em
@@ -124,9 +125,42 @@ criado_em
 | `elevacao` | float | ❌ | Altitude do observador em metros acima do nível do mar |
 | `precisao_gps` | float | ❌ | Precisão do GPS em metros |
 | `occurrence_type` | string | ❌ | Tipo: `fogo` ou `fumaca` |
-| `severity_level` | string | ❌ | Severidade: `baixo`, `medio` ou `alto` |
+| `severity_level` | integer | ❌ | Severidade de **0 a 10** — barra de rolagem no app. 0–3 baixo, 4–6 médio, 7–10 alto |
 | `description` | string | ❌ | Descrição livre da ocorrência |
-| `photo_url` | string | ❌ | URL da foto enviada pelo app |
+| `foto_url` | string | ❌ | URL da foto enviada pelo app |
+
+### Escala de Severidade
+
+| Valor | Rótulo | Significado |
+|-------|--------|-------------|
+| 0 – 3 | `baixo` | Foco pequeno, sem expansão visível |
+| 4 – 6 | `medio` | Foco moderado, fumaça visível |
+| 7 – 10 | `alto` | Foco intenso, risco elevado |
+
+O campo `severity_level` é enviado pelo app como um **inteiro de 0 a 10** (barra de rolagem/scroll). O servidor converte automaticamente para o rótulo semântico (`severity_label`) na resposta e calcula a **média (`severity_media`)** de todas as observações do grupo.
+
+---
+
+## Arquivos Alterados
+
+### `observacoes/models.py`
+- `Observacao`: adicionados `occurrence_type` (choices: `fogo`/`fumaca`), `severity_level` (`IntegerField` 0–10), `description` e property `severity_label`
+- `Grupo`: adicionado `severity_media` (`FloatField`) — média automática do grupo
+
+### `observacoes/serializers.py`
+- `ObservacaoInputSerializer`: `severity_level` validado entre 0 e 10; novos campos `occurrence_type` e `description`
+- `ObservacaoSerializer`: expõe `severity_label` (rótulo calculado via property do model)
+- `GrupoSerializer`: expõe `severity_media` e `severity_label` do grupo
+
+### `observacoes/services/geo_utils/grupo_service.py`
+- Nova função `_atualizar_severity_media(grupo)` — usa `Avg` do Django ORM, ignorando observações sem severidade
+- Chamada automática em `atribuir_ou_criar_grupo()` sempre que uma observação entra em um grupo
+
+> Após aplicar os arquivos, rode:
+> ```bash
+> python manage.py makemigrations observacoes
+> python manage.py migrate
+> ```
 
 ---
 
@@ -185,12 +219,11 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
   "lat": -10.9172,
   "lon": -37.0731,
   "azimute": 73.2,
-  "pitch": -8.5,
   "elevacao": 342.0,
   "precisao_gps": 12.0,
-  "photo_url": "https://storage.carcara.br/fotos/001.jpg",
+  "foto_url": "https://storage.carcara.br/fotos/001.jpg",
   "occurrence_type": "fumaca",
-  "severity_level": "alto",
+  "severity_level": 8,
   "description": "Coluna de fumaça densa avistada na encosta norte"
 }
 ```
@@ -203,12 +236,12 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
   "lat": -10.9172,
   "lon": -37.0731,
   "azimute": 73.2,
-  "pitch": -8.5,
   "elevacao": 342.0,
   "precisao_gps": 12.0,
-  "photo_url": "https://storage.carcara.br/fotos/001.jpg",
+  "foto_url": "https://storage.carcara.br/fotos/001.jpg",
   "occurrence_type": "fumaca",
-  "severity_level": "alto",
+  "severity_level": 8,
+  "severity_label": "alto",
   "description": "Coluna de fumaça densa avistada na encosta norte",
   "grupo_id": 7,
   "criado_em": "2026-04-03T14:32:11Z"
@@ -235,16 +268,15 @@ curl -X POST http://localhost:8000/api/observacoes/ \
     "lat": -10.9172,
     "lon": -37.0731,
     "azimute": 73.2,
-    "pitch": -8.5,
     "elevacao": 342.0,
     "precisao_gps": 12.0,
-    "photo_url": "https://storage.carcara.br/fotos/001.jpg",
+    "foto_url": "https://storage.carcara.br/fotos/001.jpg",
     "occurrence_type": "fumaca",
-    "severity_level": "alto",
+    "severity_level": 8,
     "description": "Coluna de fumaça densa avistada na encosta norte"
   }'
 
-# 3. Ver grupos formados
+# 3. Ver grupos formados (inclui severity_media e severity_label)
 curl -X GET http://localhost:8000/api/grupos/ \
   -H "Authorization: Bearer SEU_ACCESS_TOKEN"
 
@@ -274,7 +306,7 @@ Com N ≥ 2 observadores, o algoritmo encontra o ponto `P_foco` que **minimiza a
 Para cada linha de visão `i` com vetor unitário `dᵢ` e origem `Oᵢ`:
 
 ```
-Mᵢ = I − dᵢ · dᵢᵀ
+M�� = I − dᵢ · dᵢᵀ
 
 A = Σ Mᵢ
 b = Σ Mᵢ · Oᵢ
@@ -314,6 +346,8 @@ Observações são agrupadas automaticamente ao chegar. Uma nova observação en
 
 Caso contrário, um novo grupo é criado. Após cada nova observação, o grupo é reprocessado em background e um novo `FocoEstimado` é calculado.
 
+A **média de severidade** (`severity_media`) do grupo é recalculada automaticamente a cada observação adicionada, considerando apenas observações que informaram `severity_level`.
+
 ---
 
 ## Relatório Gerado
@@ -328,7 +362,8 @@ Caso contrário, um novo grupo é criado. Após cada nova observação, o grupo 
   },
   "ocorrencia": {
     "tipo": "fumaca",
-    "severidade": "alto",
+    "severity_level": 8,
+    "severity_label": "alto",
     "descricoes": [
       "Coluna de fumaça densa avistada na encosta norte"
     ]

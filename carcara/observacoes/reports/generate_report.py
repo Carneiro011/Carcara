@@ -1,152 +1,158 @@
-"""
-Geração de relatórios do Projeto CARCARÁ.
-
-Produz um relatório estruturado (dict → JSON) a partir de um FocoEstimado
-e suas observações associadas. O relatório pode ser:
-  - serializado e armazenado no banco (tabela relatorios)
-  - exposto via API como JSON
-  - renderizado como HTML para impressão/exportação
-"""
-
-import json
-from datetime import datetime, timezone
-from typing import Optional
 import logging
+
+from observacoes.models import Observacao, Grupo, FocoEstimado, Relatorio
+from observacoes.models import StatusGrupo, NivelConfianca
+
+from observacoes.services.geo_utils.triangulation import preparar_observacoes, triangular
+from observacoes.services.geo_utils.distance_calc import (
+    sao_proximas_no_espaco,
+    sao_proximas_no_tempo,
+)
+
+from observacoes.reports.generate_report import (
+    gerar_relatorio,
+    relatorio_para_json,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def gerar_relatorio(
-    foco_id: int,
-    lat_foco: float,
-    lon_foco: float,
-    distancia_media_m: float,
-    residuo_medio_m: float,
-    n_observacoes: int,
-    nivel_confianca: str,
-    distancia_por_elevacao_m: Optional[float],
-    detalhes_obs: list[dict],
-    grupo_id: int,
-) -> dict:
+# =============================================================================
+# SEVERIDADE — helper interno
+# =============================================================================
+
+def _atualizar_severity_media(grupo: Grupo) -> None:
     """
-    Gera o relatório consolidado de um foco estimado.
+    Recalcula e persiste a média de severity_level das observações do grupo.
+    Ignora observações onde severity_level é None.
 
-    Args:
-        foco_id:                  ID do FocoEstimado no banco
-        lat_foco:                 latitude estimada do foco (°)
-        lon_foco:                 longitude estimada do foco (°)
-        distancia_media_m:        distância média dos observadores ao foco (m)
-        residuo_medio_m:          desvio médio das linhas de visão (m)
-        n_observacoes:            quantidade de observações usadas
-        nivel_confianca:          "baixo" | "medio" | "alto"
-        distancia_por_elevacao_m: estimativa alternativa via ângulo de elevação
-        detalhes_obs:             lista de dicts com informações por observação
-        grupo_id:                 ID do grupo no banco
-
-    Returns:
-        Dicionário com o relatório completo (pronto para serialização JSON)
+    Faixas semânticas:
+      0–3  → baixo
+      4–6  → médio
+      7–10 → alto
     """
-
-    fotos = [
-        obs["foto_url"]
-        for obs in detalhes_obs
-        if obs.get("foto_url")
-    ]
-
-    # ── Texto de interpretação do nível de confiança ─────────────────────────
-    interpretacao = {
-        "baixo": (
-            "Estimativa baseada em apenas uma observação ou geometria desfavorável. "
-            "A localização do foco pode ter imprecisão elevada. "
-            "Recomenda-se confirmação por outras fontes."
-        ),
-        "medio": (
-            "Estimativa baseada em duas observações com geometria aceitável. "
-            "Confiabilidade moderada; validação em campo é recomendada."
-        ),
-        "alto": (
-            "Estimativa com alta confiabilidade, baseada em três ou mais "
-            "observações com boa distribuição angular. "
-            "Adequada para despacho de equipes de combate."
-        ),
-    }.get(nivel_confianca, "Nível de confiança desconhecido.")
-
-    # ── Links externos ────────────────────────────────────────────────────────
-    google_maps_url = (
-        f"https://www.google.com/maps?q={lat_foco},{lon_foco}"
+    from django.db.models import Avg
+    media = (
+        grupo.observacoes
+        .filter(severity_level__isnull=False)
+        .aggregate(media=Avg("severity_level"))["media"]
     )
-    waze_url = (
-        f"https://waze.com/ul?ll={lat_foco}%2C{lon_foco}&navigate=yes"
-    )
-
-    relatorio = {
-        "projeto": "CARCARÁ — Sistema de Localização de Focos de Incêndio",
-        "versao": "1.0",
-        "gerado_em": datetime.now(timezone.utc).isoformat(),
-
-        "identificacao": {
-            "foco_id": foco_id,
-            "grupo_id": grupo_id,
-        },
-
-        "localizacao_estimada": {
-            "latitude": lat_foco,
-            "longitude": lon_foco,
-            "google_maps": google_maps_url,
-            "waze": waze_url,
-        },
-
-        "metricas": {
-            "n_observacoes": n_observacoes,
-            "distancia_media_m": distancia_media_m,
-            "distancia_media_km": round(distancia_media_m / 1000, 2),
-            "residuo_medio_m": residuo_medio_m,
-            "distancia_por_elevacao_m": distancia_por_elevacao_m,
-            "nivel_confianca": nivel_confianca,
-            "interpretacao_confianca": interpretacao,
-        },
-
-        "observacoes": detalhes_obs,
-
-        "midias": {
-            "total_fotos": len(fotos),
-            "urls_fotos": fotos,
-        },
-
-        "acoes_recomendadas": _recomendar_acoes(nivel_confianca, distancia_media_m),
-    }
-
-    logger.info(
-        f"Relatório gerado — foco_id={foco_id} "
-        f"lat={lat_foco} lon={lon_foco} "
-        f"confianca={nivel_confianca}"
-    )
-
-    return relatorio
+    grupo.severity_media = media          # None se nenhuma obs tiver severity
+    grupo.save(update_fields=["severity_media"])
 
 
-def relatorio_para_json(relatorio: dict) -> str:
-    """Serializa o relatório para string JSON formatada (indentação 2)."""
-    return json.dumps(relatorio, ensure_ascii=False, indent=2, default=str)
+# =============================================================================
+# PROCESSAMENTO DE GRUPO
+# =============================================================================
 
-
-def _recomendar_acoes(nivel_confianca: str, distancia_m: float) -> list[str]:
+def processar_grupo_async(grupo_id: int):
     """
-    Sugere ações operacionais com base no nível de confiança e distância.
+    Versão Django do processamento (sem BackgroundTasks do FastAPI).
     """
-    acoes = []
+    try:
+        grupo = Grupo.objects.get(id=grupo_id)
+    except Grupo.DoesNotExist:
+        logger.error(f"Grupo {grupo_id} não encontrado.")
+        return
 
-    if nivel_confianca == "alto":
-        acoes.append("✅ Acionar brigada de combate ao incêndio.")
-        acoes.append("✅ Notificar Corpo de Bombeiros com coordenadas.")
-        if distancia_m > 5000:
-            acoes.append("🚁 Considerar uso de aeronave para acesso.")
-    elif nivel_confianca == "medio":
-        acoes.append("⚠️  Solicitar confirmação visual da fumaça por segundo observador.")
-        acoes.append("⚠️  Notificar brigada em estado de prontidão.")
-    else:
-        acoes.append("🔍 Aguardar mais observações para confirmar localização.")
-        acoes.append("🔍 Solicitar varredura aérea da área se possível.")
+    grupo.status = StatusGrupo.PROCESSANDO
+    grupo.save()
 
-    acoes.append("📡 Monitorar novas observações no sistema CARCARÁ.")
-    return acoes
+    try:
+        observacoes = grupo.observacoes.all()
+
+        obs_raw = [
+            {
+                "id": o.id,
+                "usuario_id": o.usuario_id,
+                "lat": o.lat,
+                "lon": o.lon,
+                "azimute": o.azimute,
+                "elevacao": o.elevacao,
+                "precisao_gps": o.precisao_gps,
+                "foto_url": o.foto_url,
+                "timestamp": o.timestamp,
+            }
+            for o in observacoes
+        ]
+
+        obs_processadas = preparar_observacoes(obs_raw)
+        resultado = triangular(obs_processadas)
+
+        # Remove foco antigo
+        FocoEstimado.objects.filter(grupo_id=grupo_id).delete()
+
+        foco = FocoEstimado.objects.create(
+            grupo=grupo,
+            lat_foco=resultado.lat_foco,
+            lon_foco=resultado.lon_foco,
+            distancia_media_m=resultado.distancia_media_m,
+            residuo_medio_m=resultado.residuo_medio_m,
+            n_observacoes=resultado.n_observacoes,
+            nivel_confianca=resultado.nivel_confianca,
+            distancia_elevacao_m=resultado.distancia_por_elevacao_m,
+        )
+
+        relatorio_dict = gerar_relatorio(
+            foco_id=foco.id,
+            lat_foco=resultado.lat_foco,
+            lon_foco=resultado.lon_foco,
+            distancia_media_m=resultado.distancia_media_m,
+            residuo_medio_m=resultado.residuo_medio_m,
+            n_observacoes=resultado.n_observacoes,
+            nivel_confianca=resultado.nivel_confianca,
+            distancia_por_elevacao_m=resultado.distancia_por_elevacao_m,
+            detalhes_obs=resultado.detalhes_por_obs,
+            grupo_id=grupo_id,
+        )
+
+        Relatorio.objects.create(
+            foco=foco,
+            conteudo_json=relatorio_para_json(relatorio_dict),
+        )
+
+        grupo.status = StatusGrupo.CONCLUIDO
+        grupo.save()
+
+        logger.info(f"Grupo {grupo_id} processado com sucesso.")
+
+    except Exception as e:
+        grupo.status = StatusGrupo.ERRO
+        grupo.save()
+        logger.exception(f"Erro ao processar grupo {grupo_id}: {e}")
+
+
+# =============================================================================
+# AGRUPAMENTO DE OBSERVAÇÕES
+# =============================================================================
+
+def atribuir_ou_criar_grupo(nova_obs: Observacao) -> Grupo:
+    """
+    Atribui a observação a um grupo próximo existente ou cria um novo.
+    Após a atribuição, recalcula a média de severidade do grupo.
+    Retorna o objeto Grupo.
+    """
+    candidatas = Observacao.objects.exclude(id=nova_obs.id).select_related("grupo")
+
+    for obs in candidatas:
+        if (
+            obs.grupo_id
+            and sao_proximas_no_tempo(nova_obs.timestamp, obs.timestamp)
+            and sao_proximas_no_espaco(
+                {"lat": nova_obs.lat, "lon": nova_obs.lon},
+                {"lat": obs.lat, "lon": obs.lon},
+            )
+        ):
+            nova_obs.grupo = obs.grupo
+            nova_obs.save(update_fields=["grupo"])
+            _atualizar_severity_media(obs.grupo)
+            logger.info(f"Obs {nova_obs.id} adicionada ao grupo {obs.grupo_id}")
+            return obs.grupo
+
+    # Nenhum grupo próximo — cria novo
+    novo_grupo = Grupo.objects.create()
+    nova_obs.grupo = novo_grupo
+    nova_obs.save(update_fields=["grupo"])
+    _atualizar_severity_media(novo_grupo)
+    logger.info(f"Novo grupo {novo_grupo.id} criado para obs {nova_obs.id}")
+    return novo_grupo
