@@ -43,19 +43,18 @@ def processar_grupo_async(grupo_id: int):
 
         obs_raw = [
             {
-                "id":           o.id,
-                "usuario_id":   o.usuario_id,
-                "lat":          o.lat,
-                "lon":          o.lon,
-                "azimute":      o.azimute,
-                "pitch":        o.pitch,
-                "elevacao":     o.elevacao,
-                "precisao_gps": o.precisao_gps,
-                "foto_url":     o.foto_url,
-                "descricao":    o.descricao,
-                "tipo_ocorrencia": o.tipo_ocorrencia,
-                "severidade":   o.severidade,
-                "timestamp":    o.timestamp,
+                "id":              o.id,
+                "usuario_id":      o.usuario_id,
+                "lat":             o.lat,
+                "lon":             o.lon,
+                "azimute":         o.azimute,
+                "elevacao":        o.elevacao,
+                "precisao_gps":    o.precisao_gps,
+                "foto_url":        o.foto_url,
+                "descricao":       o.description,
+                "tipo_ocorrencia": o.occurrence_type,
+                "severidade":      o.severity_level,
+                "timestamp":       o.timestamp,
             }
             for o in observacoes
         ]

@@ -92,15 +92,15 @@ class ObservacaoViewSet(viewsets.ViewSet):
         qs = Observacao.objects.select_related("grupo")
 
         usuario_id      = request.query_params.get("usuario_id")
-        tipo_ocorrencia = request.query_params.get("tipo_ocorrencia")
-        severidade      = request.query_params.get("severidade")
+        tipo_ocorrencia = request.query_params.get("occurrence_type")
+        severidade      = request.query_params.get("severity_level")
 
         if usuario_id:
             qs = qs.filter(usuario_id=usuario_id)
         if tipo_ocorrencia:
-            qs = qs.filter(tipo_ocorrencia=tipo_ocorrencia)
+            qs = qs.filter(occurrence_type=tipo_ocorrencia)
         if severidade:
-            qs = qs.filter(severidade=severidade)
+            qs = qs.filter(severity_level=severidade)
 
         limite = min(int(request.query_params.get("limite", 50)), 500)
         qs = qs[:limite]
@@ -133,11 +133,10 @@ class ObservacaoViewSet(viewsets.ViewSet):
             lon             = d["lon"],
             elevacao        = d.get("elevacao"),
             azimute         = d["azimute"],
-            pitch           = d.get("pitch"),
             precisao_gps    = d.get("precisao_gps"),
-            tipo_ocorrencia = d.get("occurrence_type"),
-            severidade      = d.get("severity_level"),
-            descricao       = d.get("description", ""),
+            occurrence_type = d.get("occurrence_type"),
+            severity_level  = d.get("severity_level"),
+            description     = d.get("description", ""),
             foto_url        = d.get("photo_url"),
         )
 
@@ -329,19 +328,18 @@ class MapaDadosView(View):
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [obs.lon, obs.lat]},
                 "properties": {
-                    "tipo":           "observador",
-                    "id":             obs.pk,
-                    "usuario_id":     obs.usuario_id,
-                    "azimute":        obs.azimute,
-                    "pitch":          obs.pitch,
-                    "elevacao":       obs.elevacao,
-                    "precisao_gps":   obs.precisao_gps,
-                    "tipo_ocorrencia": obs.tipo_ocorrencia,
-                    "severidade":     obs.severidade,
-                    "descricao":      obs.descricao,
-                    "timestamp":      obs.timestamp.isoformat(),
-                    "grupo_id":       obs.grupo_id,
-                    "foto_url":       obs.foto_url,
+                    "tipo":            "observador",
+                    "id":              obs.pk,
+                    "usuario_id":      obs.usuario_id,
+                    "azimute":         obs.azimute,
+                    "elevacao":        obs.elevacao,
+                    "precisao_gps":    obs.precisao_gps,
+                    "tipo_ocorrencia": obs.occurrence_type,
+                    "severidade":      obs.severity_level,
+                    "descricao":       obs.description,
+                    "timestamp":       obs.timestamp.isoformat(),
+                    "grupo_id":        obs.grupo_id,
+                    "foto_url":        obs.foto_url,
                 },
             })
 
