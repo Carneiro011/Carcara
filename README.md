@@ -7,7 +7,7 @@
 
 O **Carcará** é um servidor central que recebe observações de usuários em campo (via aplicativo mobile), processa as direções de visão a partir das posições dos observadores e calcula a **localização provável de um foco de incêndio por triangulação geométrica**.
 
-Cada observação carrega a posição 3D do observador (latitude, longitude e elevação), a direção da visada (azimute horizontal + pitch vertical do dispositivo), o tipo de ocorrência e a severidade. Com duas ou mais observações de pontos distintos, o algoritmo cruza os vetores de visão e estima as coordenadas do foco. O nível de confiança da estimativa é calculado dinamicamente a partir de parâmetros configuráveis pelo staff.
+Cada observação carrega a posição do observador (latitude, longitude e elevação), a direção da visada (azimute horizontal), o tipo de ocorrência e a severidade. Com duas ou mais observações de pontos distintos, o algoritmo cruza os vetores de visão e estima as coordenadas do foco. O nível de confiança da estimativa é calculado dinamicamente a partir de parâmetros configuráveis pelo staff.
 
 ---
 
@@ -482,12 +482,3 @@ Cada foco processado gera um relatório JSON armazenado no banco e acessível vi
 
 ---
 
-## Commits Recentes
-
-| Hash | Descrição |
-|------|-----------|
-| — | Adiciona `ConfiguracaoSistema` com parâmetros de confiança configuráveis |
-| — | Lógica de confiança parametrizada (remove hardcode do triangulation.py) |
-| — | Permissão de edição de configurações para usuários staff |
-| — | Correção do attribution do mapa Leaflet (OpenStreetMap) |
-| — | Migration `0002_configuracaosistema_completo` + `0003_configuracao_confianca` |
