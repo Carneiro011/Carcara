@@ -7,45 +7,58 @@
 
 O **Carcará** é um servidor central que recebe observações de usuários em campo (via aplicativo mobile), processa as direções de visão a partir das posições dos observadores e calcula a **localização provável de um foco de incêndio por triangulação geométrica**.
 
-Cada observação carrega a posição 3D do observador (latitude, longitude e elevação acima do nível do mar), a direção da visada (azimute horizontal + pitch vertical do dispositivo), o tipo de ocorrência e a severidade. Com duas ou mais observações de pontos distintos, o algoritmo cruza os vetores de visão e estima as coordenadas do foco.
+Cada observação carrega a posição 3D do observador (latitude, longitude e elevação), a direção da visada (azimute horizontal + pitch vertical do dispositivo), o tipo de ocorrência e a severidade. Com duas ou mais observações de pontos distintos, o algoritmo cruza os vetores de visão e estima as coordenadas do foco. O nível de confiança da estimativa é calculado dinamicamente a partir de parâmetros configuráveis pelo staff.
 
 ---
 
 ## Estrutura do Projeto
 
 ```
-carcara/
-├── manage.py
-├── accounts/                        ← App de autenticação (JWT)
-│   ├── models.py                    ← Modelo Usuario (AbstractUser)
-│   ├── serializers.py
-│   ├── views.py
-│   ├── urls.py
-│   └── admin.py
-├── observacoes/                     ← App principal
-│   ├── models.py          ✏️        ← Observacao, Grupo, FocoEstimado, Relatorio
-│   ├── serializers.py     ✏️
-│   ├── views.py
-│   ├── urls.py
-│   ├── mapa.py                      ← Visualização Leaflet
-│   └── services/
-│       └── geo_utils/
-│           ├── grupo_service.py ✏️  ← Agrupamento + média de severidade
-│           └── triangulation.py    ← Algoritmo de triangulação (mínimos quadrados)
-└── carcara/                         ← Configurações do projeto
-    ├── settings.py
-    └── urls.py
+Carcara/
+├── requirements.txt
+├── README.md
+└── carcara/
+    ├── manage.py
+    ├── carcara/                         ← Configurações do projeto Django
+    │   ├── settings.py
+    │   ├── urls.py
+    │   ├── asgi.py
+    │   └── wsgi.py
+    ├── accounts/                        ← App de autenticação (JWT)
+    │   ├── models.py                    ← Modelo Usuario (AbstractUser)
+    │   ├── serializers.py
+    │   ├── views.py
+    │   ├── urls.py
+    │   └── admin.py
+    └── observacoes/                     ← App principal
+        ├── models.py                    ← Observacao, Grupo, FocoEstimado,
+        │                                   Relatorio, ConfiguracaoSistema
+        ├── serializers.py
+        ├── views.py
+        ├── urls.py
+        ├── mapa.py                      ← Página Leaflet (HTML inline)
+        ├── migrations/
+        │   ├── 0001_initial.py
+        │   ├── 0002_configuracaosistema_completo.py
+        │   └── 0003_configuracao_confianca.py
+        ├── reports/
+        │   └── generate_report.py      ← Geração de relatório JSON
+        └── services/
+            └── geo_utils/
+                ├── geo_utils.py        ← Conversão WGS84 ↔ UTM
+                ├── distance_calc.py    ← Haversine, agrupamento Union-Find
+                ├── grupo_service.py    ← Agrupamento espaço-temporal
+                └── triangulation.py   ← Algoritmo de triangulação (MQ)
 ```
-
-> ✏️ Arquivos alterados na última atualização — ver seção **Arquivos Alterados** abaixo.
 
 ---
 
 ## Instalação
 
 ```bash
-# 1. Entre na pasta do projeto
-cd carcara
+# 1. Clone o repositório
+git clone <url-do-repositorio>
+cd Carcara/carcara
 
 # 2. Crie e ative o ambiente virtual
 python -m venv venv
@@ -58,8 +71,6 @@ pip install -r requirements.txt
 # 4. Configure as variáveis de ambiente (veja seção abaixo)
 
 # 5. Rode as migrations
-python manage.py makemigrations accounts
-python manage.py makemigrations observacoes
 python manage.py migrate
 
 # 6. Crie um superusuário
@@ -73,7 +84,7 @@ python manage.py runserver
 
 ## Variáveis de Ambiente
 
-Crie um arquivo `.env` na pasta onde está o `manage.py`:
+Crie um arquivo `.env` na mesma pasta do `manage.py`:
 
 ```env
 DEBUG=true
@@ -94,22 +105,33 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:8000
 ## Modelo do Banco de Dados
 
 ```
-observacoes              grupos                 focos_estimados          relatorios
-─────────────────────    ──────────────────     ────────────────────     ──────────────
-id (PK)                  id (PK)                id (PK)                  id (PK)
-usuario_id               status                 grupo_id (FK)            foco_id (FK)
-timestamp                severity_media ← novo  lat_foco                 conteudo_json
-lat                      criado_em              lon_foco                 gerado_em
-lon                      atualizado_em          distancia_media_m        enviado
-azimute                                         residuo_medio_m
-elevacao                                        n_observacoes
-precisao_gps                                    nivel_confianca
-foto_url                                        distancia_elevacao_m
-occurrence_type                                 calculado_em
-severity_level ← novo
+observacoes              grupos               focos_estimados
+──────────────────       ──────────────       ────────────────────
+id (PK)                  id (PK)              id (PK)
+usuario_id               status               grupo_id (FK)
+timestamp                severity_media       lat_foco
+lat                      criado_em            lon_foco
+lon                      atualizado_em        distancia_media_m
+azimute                                       residuo_medio_m
+elevacao                                      n_observacoes
+precisao_gps                                  nivel_confianca
+foto_url                                      distancia_elevacao_m
+occurrence_type                               calculado_em
+severity_level
 description
-grupo_id (FK)
-criado_em
+grupo_id (FK)            relatorios           configuracoes_sistema
+criado_em                ──────────────       ─────────────────────
+                         id (PK)              id (PK)
+                         foco_id (FK)         raio_espacial_km
+                         conteudo_json        raio_confianca_alto_m
+                         gerado_em            raio_confianca_medio_m
+                         enviado              raio_confianca_baixo_m
+                                              min_obs_alto
+                                              residuo_alto_m
+                                              dist_media_alto_m
+                                              min_obs_medio
+                                              angulo_min_graus
+                                              residuo_medio_m
 ```
 
 ### Campos da Observação
@@ -121,46 +143,23 @@ criado_em
 | `lat` | float | ✅ | Latitude do observador (WGS84) |
 | `lon` | float | ✅ | Longitude do observador (WGS84) |
 | `azimute` | float | ✅ | Direção horizontal da visada em graus (0–360°) |
-| `pitch` | float | ❌ | Ângulo vertical do dispositivo em graus (-90° a +90°) |
-| `elevacao` | float | ❌ | Altitude do observador em metros acima do nível do mar |
+| `elevacao` | float | ❌ | Altitude do observador em metros (nível do mar) |
 | `precisao_gps` | float | ❌ | Precisão do GPS em metros |
 | `occurrence_type` | string | ❌ | Tipo: `fogo` ou `fumaca` |
-| `severity_level` | integer | ❌ | Severidade de **0 a 10** — barra de rolagem no app. 0–3 baixo, 4–6 médio, 7–10 alto |
+| `severity_level` | int | ❌ | Severidade de 0 a 10 (0–3 baixo, 4–6 médio, 7–10 alto) |
 | `description` | string | ❌ | Descrição livre da ocorrência |
 | `foto_url` | string | ❌ | URL da foto enviada pelo app |
 
-### Escala de Severidade
+### Modelo de Usuário
 
-| Valor | Rótulo | Significado |
-|-------|--------|-------------|
-| 0 – 3 | `baixo` | Foco pequeno, sem expansão visível |
-| 4 – 6 | `medio` | Foco moderado, fumaça visível |
-| 7 – 10 | `alto` | Foco intenso, risco elevado |
+O modelo `Usuario` estende `AbstractUser` do Django com os campos adicionais:
 
-O campo `severity_level` é enviado pelo app como um **inteiro de 0 a 10** (barra de rolagem/scroll). O servidor converte automaticamente para o rótulo semântico (`severity_label`) na resposta e calcula a **média (`severity_media`)** de todas as observações do grupo.
-
----
-
-## Arquivos Alterados
-
-### `observacoes/models.py`
-- `Observacao`: adicionados `occurrence_type` (choices: `fogo`/`fumaca`), `severity_level` (`IntegerField` 0–10), `description` e property `severity_label`
-- `Grupo`: adicionado `severity_media` (`FloatField`) — média automática do grupo
-
-### `observacoes/serializers.py`
-- `ObservacaoInputSerializer`: `severity_level` validado entre 0 e 10; novos campos `occurrence_type` e `description`
-- `ObservacaoSerializer`: expõe `severity_label` (rótulo calculado via property do model)
-- `GrupoSerializer`: expõe `severity_media` e `severity_label` do grupo
-
-### `observacoes/services/geo_utils/grupo_service.py`
-- Nova função `_atualizar_severity_media(grupo)` — usa `Avg` do Django ORM, ignorando observações sem severidade
-- Chamada automática em `atribuir_ou_criar_grupo()` sempre que uma observação entra em um grupo
-
-> Após aplicar os arquivos, rode:
-> ```bash
-> python manage.py makemigrations observacoes
-> python manage.py migrate
-> ```
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `nome_completo` | string | Nome completo do usuário |
+| `instituicao` | string | Instituição (ex: Corpo de Bombeiros, ICMBio) |
+| `tipo_usuario` | string | `ADMIN` ou `USUARIO` |
+| `email` | string | E-mail único (obrigatório) |
 
 ---
 
@@ -173,7 +172,7 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
    ```
    Authorization: Bearer <access_token>
    ```
-3. Quando o `access` expirar, use o `refresh` para obter um novo
+3. Quando o `access` expirar, use o `refresh` para renovar
 
 ---
 
@@ -196,6 +195,8 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
 
 | Método | Rota | Descrição | Auth |
 |--------|------|-----------|------|
+| `GET` | `/api/configuracoes/` | Ver configurações do sistema | Sim |
+| `PATCH` | `/api/configuracoes/` | Alterar configurações | Staff |
 | `POST` | `/api/observacoes/` | Enviar nova observação | Sim |
 | `GET` | `/api/observacoes/` | Listar observações | Sim |
 | `GET` | `/api/observacoes/{id}/` | Detalhar observação | Sim |
@@ -204,9 +205,9 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
 | `POST` | `/api/grupos/{id}/processar/` | Reprocessar triangulação | Staff |
 | `GET` | `/api/focos/` | Listar focos estimados | Sim |
 | `GET` | `/api/focos/{id}/` | Detalhar foco | Sim |
-| `GET` | `/api/relatorios/{foco_id}/` | Relatório completo | Sim |
+| `GET` | `/api/relatorios/{foco_id}/` | Relatório completo (JSON) | Sim |
 | `GET` | `/api/mapa/dados/` | GeoJSON para o mapa | Não |
-| `GET` | `/mapa/` | Visualização do mapa (Leaflet) | Não |
+| `GET` | `/mapa/` | Visualização Leaflet interativa | Não |
 
 ---
 
@@ -215,7 +216,7 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
 ```json
 {
   "usuario_id": "brigadista_01",
-  "timestamp": "2026-04-03T14:32:10",
+  "timestamp": "2026-04-08T14:32:10",
   "lat": -10.9172,
   "lon": -37.0731,
   "azimute": 73.2,
@@ -236,17 +237,41 @@ A API usa **JSON Web Tokens (JWT)**. O fluxo é:
   "lat": -10.9172,
   "lon": -37.0731,
   "azimute": 73.2,
-  "elevacao": 342.0,
-  "precisao_gps": 12.0,
-  "foto_url": "https://storage.carcara.br/fotos/001.jpg",
-  "occurrence_type": "fumaca",
   "severity_level": 8,
   "severity_label": "alto",
-  "description": "Coluna de fumaça densa avistada na encosta norte",
   "grupo_id": 7,
-  "criado_em": "2026-04-03T14:32:11Z"
+  "criado_em": "2026-04-08T14:32:11Z"
 }
 ```
+
+---
+
+## Payload — PATCH `/api/configuracoes/`
+
+Requer `is_staff=True` ou `is_superuser=True`.
+
+```json
+{
+  "raio_espacial_km": 3.0,
+  "raio_confianca_alto_m": 500.0,
+  "raio_confianca_medio_m": 1500.0,
+  "raio_confianca_baixo_m": 3000.0,
+  "min_obs_alto": 3,
+  "residuo_alto_m": 500.0,
+  "dist_media_alto_m": 5000.0,
+  "min_obs_medio": 2,
+  "angulo_min_graus": 15.0,
+  "residuo_medio_m": 500.0
+}
+```
+
+Todos os campos são opcionais (PATCH parcial). Validações aplicadas:
+
+- `raio_espacial_km`: entre 0.1 e 50.0 km
+- `min_obs_alto` deve ser ≥ `min_obs_medio`
+- Raios de mapa: entre 50 m e 50.000 m
+- Resíduos: entre 10 m e 10.000 m
+- Ângulo: entre 1° e 90°
 
 ---
 
@@ -264,76 +289,31 @@ curl -X POST http://localhost:8000/api/observacoes/ \
   -H "Content-Type: application/json" \
   -d '{
     "usuario_id": "brigadista_01",
-    "timestamp": "2026-04-03T14:32:10",
+    "timestamp": "2026-04-08T14:32:10",
     "lat": -10.9172,
     "lon": -37.0731,
     "azimute": 73.2,
     "elevacao": 342.0,
     "precisao_gps": 12.0,
-    "foto_url": "https://storage.carcara.br/fotos/001.jpg",
     "occurrence_type": "fumaca",
     "severity_level": 8,
-    "description": "Coluna de fumaça densa avistada na encosta norte"
+    "description": "Coluna de fumaça na encosta norte"
   }'
 
-# 3. Ver grupos formados (inclui severity_media e severity_label)
+# 3. Ver grupos formados
 curl -X GET http://localhost:8000/api/grupos/ \
   -H "Authorization: Bearer SEU_ACCESS_TOKEN"
 
 # 4. Ver foco estimado
 curl -X GET http://localhost:8000/api/focos/1/ \
   -H "Authorization: Bearer SEU_ACCESS_TOKEN"
+
+# 5. Alterar configurações (requer staff)
+curl -X PATCH http://localhost:8000/api/configuracoes/ \
+  -H "Authorization: Bearer SEU_ACCESS_TOKEN_STAFF" \
+  -H "Content-Type: application/json" \
+  -d '{"raio_espacial_km": 5.0, "min_obs_alto": 4}'
 ```
-
----
-
-## Algoritmo de Triangulação
-
-### Problema
-
-Cada observador está em uma posição 3D conhecida `(x₀, y₀, z₀)` (UTM + elevação) e aponta o celular para a fumaça, gerando um **vetor de visão 3D** definido pelo azimute `θ` e pelo pitch `φ`:
-
-```
-d = (cos φ · sin θ,  cos φ · cos θ,  sin φ)
-
-L(t) = O + t · d     (t ≥ 0)
-```
-
-Com N ≥ 2 observadores, o algoritmo encontra o ponto `P_foco` que **minimiza a soma das distâncias perpendiculares** a todas as linhas de visão.
-
-### Formulação Matricial (Mínimos Quadrados)
-
-Para cada linha de visão `i` com vetor unitário `dᵢ` e origem `Oᵢ`:
-
-```
-M�� = I − dᵢ · dᵢᵀ
-
-A = Σ Mᵢ
-b = Σ Mᵢ · Oᵢ
-
-P_foco = A⁻¹ · b
-```
-
-### Estimativa por Pitch
-
-Quando o `pitch` está disponível, é possível estimar a distância horizontal ao foco independentemente:
-
-```
-Δh = elevacao_observador − elevacao_estimada_foco
-r  = Δh / tan(pitch)
-```
-
-Esse valor serve como validação cruzada com a triangulação por azimute.
-
-### Nível de Confiança
-
-| Condição | Nível |
-|----------|-------|
-| 1 observação | Baixo |
-| 2 obs. com ângulo entre visadas < 15° | Baixo |
-| 2 obs. com ângulo ≥ 15° | Médio |
-| 3+ obs. com resíduo ≤ 500 m | Alto |
-| Resíduo > 1000 m (qualquer N) | Baixo |
 
 ---
 
@@ -342,54 +322,72 @@ Esse valor serve como validação cruzada com a triangulação por azimute.
 Observações são agrupadas automaticamente ao chegar. Uma nova observação entra em um grupo existente se:
 
 - A diferença de tempo com a observação mais recente do grupo for **≤ 30 minutos**
-- A distância entre os observadores for **≤ 10 km**
+- A distância entre os observadores for **≤ raio configurado** (padrão: **3 km**)
 
 Caso contrário, um novo grupo é criado. Após cada nova observação, o grupo é reprocessado em background e um novo `FocoEstimado` é calculado.
 
-A **média de severidade** (`severity_media`) do grupo é recalculada automaticamente a cada observação adicionada, considerando apenas observações que informaram `severity_level`.
+O raio de agrupamento pode ser ajustado via `PATCH /api/configuracoes/` por usuários com permissão **staff** ou **admin**.
 
 ---
 
-## Relatório Gerado
+## Algoritmo de Triangulação
 
-```json
-{
-  "projeto": "CARCARÁ — Sistema de Localização de Focos de Incêndio",
-  "localizacao_estimada": {
-    "latitude": -10.89341,
-    "longitude": -37.06127,
-    "google_maps": "https://www.google.com/maps?q=-10.89341,-37.06127"
-  },
-  "ocorrencia": {
-    "tipo": "fumaca",
-    "severity_level": 8,
-    "severity_label": "alto",
-    "descricoes": [
-      "Coluna de fumaça densa avistada na encosta norte"
-    ]
-  },
-  "metricas": {
-    "n_observacoes": 3,
-    "distancia_media_m": 2847.3,
-    "distancia_media_km": 2.85,
-    "residuo_medio_m": 124.7,
-    "nivel_confianca": "alto",
-    "interpretacao": "Estimativa com alta confiabilidade — 3 observadores com baixo resíduo."
-  },
-  "midias": {
-    "total_fotos": 2,
-    "urls_fotos": [
-      "https://storage.carcara.br/fotos/001.jpg",
-      "https://storage.carcara.br/fotos/002.jpg"
-    ]
-  },
-  "acoes_recomendadas": [
-    "✅ Acionar brigada de combate ao incêndio.",
-    "✅ Notificar Corpo de Bombeiros com as coordenadas estimadas.",
-    "✅ Monitorar evolução com novas observações."
-  ]
-}
+### Problema
+
+Cada observador está em uma posição conhecida `(x₀, y₀)` em coordenadas UTM e aponta o celular para a fumaça, gerando um **vetor de visão** definido pelo azimute `θ`:
+
 ```
+d = (cos θ,  sin θ)
+L(t) = O + t · d     (t ≥ 0)
+```
+
+Com N ≥ 2 observadores, o algoritmo encontra o ponto `P_foco` que **minimiza a soma das distâncias perpendiculares** a todas as linhas de visão.
+
+### Formulação Matricial (Mínimos Quadrados)
+
+Para cada linha de visão `i` com vetor unitário `d_i` e origem `O_i`:
+
+```
+M_i = I − d_i · d_iᵀ
+
+A = Σ M_i
+b = Σ M_i · O_i
+
+P_foco = A⁻¹ · b
+```
+
+### Estimativa por Elevação (Pitch)
+
+Quando o ângulo de elevação está disponível, estima-se a distância horizontal ao foco:
+
+```
+r = Δh / tan(φ)
+```
+
+onde `Δh` é a diferença de altitude entre observador e referência (padrão: 50 m). Serve como validação cruzada com a triangulação por azimute.
+
+### Nível de Confiança (parametrizado)
+
+A confiança é calculada em conjunção lógica (E), avaliada em ordem:
+
+| Nível | Condição |
+|-------|----------|
+| **Alto** | n_obs ≥ `min_obs_alto` **E** resíduo ≤ `residuo_alto_m` **E** dist_média ≤ `dist_media_alto_m` |
+| **Médio** | n_obs ≥ `min_obs_medio` **E** ângulo_min ≥ `angulo_min_graus` **E** resíduo ≤ `residuo_medio_m` |
+| **Baixo** | qualquer outro caso |
+
+**Valores padrão:**
+
+| Parâmetro | Padrão |
+|-----------|--------|
+| `min_obs_alto` | 3 observadores |
+| `residuo_alto_m` | 500 m |
+| `dist_media_alto_m` | 5.000 m |
+| `min_obs_medio` | 2 observadores |
+| `angulo_min_graus` | 15° |
+| `residuo_medio_m` | 500 m |
+
+Todos os parâmetros são ajustáveis pelo staff via `PATCH /api/configuracoes/`.
 
 ---
 
@@ -397,10 +395,12 @@ A **média de severidade** (`severity_media`) do grupo é recalculada automatica
 
 Acesse: `http://localhost:8000/mapa/`
 
-Visualização em tempo real com Leaflet mostrando:
+Visualização em tempo real com Leaflet (OpenStreetMap) mostrando:
+
 - 📍 Posição dos observadores
-- ➡️ Linhas de visada (azimute + pitch)
-- 🔥 Focos estimados com raio de confiança colorido por severidade
+- ➡️ Linhas de visada (azimute)
+- 🔥 Focos estimados com raio de confiança colorido por nível
+- Atualização automática a cada 15 segundos
 
 ---
 
@@ -408,18 +408,86 @@ Visualização em tempo real com Leaflet mostrando:
 
 Acesse: `http://localhost:8000/admin/`
 
-Gerencie usuários, observações, grupos e focos diretamente pelo painel do Django.
+Gerencie usuários, observações, grupos, focos e configurações diretamente pelo painel do Django.
+
+---
+
+## Relatório Gerado
+
+Cada foco processado gera um relatório JSON armazenado no banco e acessível via `GET /api/relatorios/{foco_id}/`:
+
+```json
+{
+  "projeto": "CARCARÁ — Sistema de Localização de Focos de Incêndio",
+  "versao": "1.0",
+  "gerado_em": "2026-04-08T14:35:00Z",
+  "identificacao": {
+    "foco_id": 1,
+    "grupo_id": 7
+  },
+  "localizacao_estimada": {
+    "latitude": -10.89341,
+    "longitude": -37.06127,
+    "google_maps": "https://www.google.com/maps?q=-10.89341,-37.06127",
+    "waze": "https://waze.com/ul?ll=-10.89341%2C-37.06127&navigate=yes"
+  },
+  "metricas": {
+    "n_observacoes": 3,
+    "distancia_media_m": 2847.3,
+    "distancia_media_km": 2.85,
+    "residuo_medio_m": 124.7,
+    "nivel_confianca": "alto",
+    "interpretacao_confianca": "Estimativa com alta confiabilidade..."
+  },
+  "observacoes": [...],
+  "midias": {
+    "total_fotos": 2,
+    "urls_fotos": ["https://..."]
+  },
+  "acoes_recomendadas": [
+    "✅ Acionar brigada de combate ao incêndio.",
+    "✅ Notificar Corpo de Bombeiros com coordenadas.",
+    "📡 Monitorar novas observações no sistema CARCARÁ."
+  ]
+}
+```
+
+---
+
+## Permissões
+
+| Ação | Usuário comum | Staff | Admin/Superuser |
+|------|:---:|:---:|:---:|
+| Enviar observação | ✅ | ✅ | ✅ |
+| Ver grupos e focos | ✅ | ✅ | ✅ |
+| Ver configurações | ✅ | ✅ | ✅ |
+| Alterar configurações | ❌ | ✅ | ✅ |
+| Reprocessar grupo | ❌ | ✅ | ✅ |
+| Painel admin | ❌ | ✅ | ✅ |
 
 ---
 
 ## Dependências Principais
 
-| Pacote | Função |
-|--------|--------|
-| Django 5.x | Framework web |
-| djangorestframework | API REST |
-| djangorestframework-simplejwt | Autenticação JWT |
-| django-cors-headers | CORS para frontend/app mobile |
-| psycopg2 | Conector PostgreSQL |
-| numpy | Álgebra linear para triangulação |
-| pyproj | Conversão WGS84 ↔ UTM |
+| Pacote | Versão | Função |
+|--------|--------|--------|
+| Django | ≥ 5.0 | Framework web |
+| djangorestframework | ≥ 3.15 | API REST |
+| djangorestframework-simplejwt | — | Autenticação JWT |
+| django-cors-headers | ≥ 4.3 | CORS para app mobile |
+| psycopg2-binary | ≥ 2.9 | Conector PostgreSQL |
+| numpy | ≥ 1.26 | Álgebra linear (triangulação) |
+| pyproj | ≥ 3.6 | Conversão WGS84 ↔ UTM |
+| python-dotenv | ≥ 1.0 | Variáveis de ambiente |
+
+---
+
+## Commits Recentes
+
+| Hash | Descrição |
+|------|-----------|
+| — | Adiciona `ConfiguracaoSistema` com parâmetros de confiança configuráveis |
+| — | Lógica de confiança parametrizada (remove hardcode do triangulation.py) |
+| — | Permissão de edição de configurações para usuários staff |
+| — | Correção do attribution do mapa Leaflet (OpenStreetMap) |
+| — | Migration `0002_configuracaosistema_completo` + `0003_configuracao_confianca` |
