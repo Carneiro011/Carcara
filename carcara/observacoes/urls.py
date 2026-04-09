@@ -1,11 +1,5 @@
 """
-PROJETO CARCARÁ — URLs raiz do projeto Django
-===============================================
-Se integrar ao Django existente do NUPREDS, apenas adicione:
-
-    path("caraca/", include("caraca.urls")),
-
-ao urls.py já existente.
+PROJETO CARCARÁ — URLs do app observacoes
 """
 
 from django.urls import path, include
@@ -17,24 +11,26 @@ from .views import (
     FocoViewSet,
     RelatorioViewSet,
     MapaDadosView,
+    ConfiguracaoSistemaView,
 )
-
 from .mapa import mapa_view
 
-# Router DRF
 router = DefaultRouter()
 router.register(r"observacoes", ObservacaoViewSet, basename="observacao")
-router.register(r"grupos", GrupoViewSet, basename="grupo")
-router.register(r"focos", FocoViewSet, basename="foco")
-router.register(r"relatorios", RelatorioViewSet, basename="relatorio")
+router.register(r"grupos",      GrupoViewSet,      basename="grupo")
+router.register(r"focos",       FocoViewSet,       basename="foco")
+router.register(r"relatorios",  RelatorioViewSet,  basename="relatorio")
 
 urlpatterns = [
     # API REST
     path("api/", include(router.urls)),
 
-    # GeoJSON do mapa
+    # Configurações do sistema (GET: autenticado | PATCH: somente staff)
+    path("api/configuracoes/", ConfiguracaoSistemaView.as_view(), name="configuracoes"),
+
+    # GeoJSON do mapa (público)
     path("api/mapa/dados/", MapaDadosView.as_view(), name="mapa-dados"),
 
-    # Página HTML (Leaflet)
+    # Página HTML Leaflet (público)
     path("mapa/", mapa_view, name="mapa"),
 ]

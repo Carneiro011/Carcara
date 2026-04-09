@@ -1,19 +1,4 @@
 from django.db import models
-
-# Create your models here.
-"""
-PROJETO CARCARÁ — Modelos Django
-==================================
-Equivalente direto dos modelos SQLAlchemy, reescritos para o Django ORM.
-O PostGIS é suportado nativamente via django.contrib.gis (GeoDjango).
-
-Diferenças principais vs SQLAlchemy:
-  - Sem declarar engine/sessão — o Django gerencia tudo via settings.DATABASES
-  - Migrações geradas automaticamente com: python manage.py makemigrations
-  - Admin gratuito: qualquer Model aparece em /admin sem código extra
-"""
-
-from django.db import models
 from django.utils import timezone
 
 
@@ -35,10 +20,14 @@ class Grupo(models.Model):
     Agrupamento espaço-temporal de observações que provavelmente
     descrevem o mesmo foco de incêndio.
     """
-    status        = models.CharField(
+    status = models.CharField(
         max_length=12,
         choices=StatusGrupo.choices,
         default=StatusGrupo.PENDENTE,
+    )
+    severity_media = models.FloatField(
+        null=True, blank=True,
+        help_text="Média da severidade (0–10) das observações do grupo",
     )
     criado_em     = models.DateTimeField(default=timezone.now)
     atualizado_em = models.DateTimeField(auto_now=True)
@@ -57,15 +46,31 @@ class Observacao(models.Model):
     Registra uma única observação enviada pelo aplicativo mobile.
     Cada observação é um vetor de visada: posição + azimute do observador.
     """
-    usuario_id    = models.CharField(max_length=64, db_index=True)
-    timestamp     = models.DateTimeField(db_index=True)
-    lat           = models.FloatField()
-    lon           = models.FloatField()
-    azimute       = models.FloatField()          # graus 0–360
-    elevacao      = models.FloatField(null=True, blank=True)   # graus
-    precisao_gps  = models.FloatField(null=True, blank=True)   # metros
-    foto_url      = models.URLField(max_length=512, null=True, blank=True)
-    criado_em     = models.DateTimeField(default=timezone.now)
+
+    class TipoOcorrencia(models.TextChoices):
+        FOGO   = "fogo",   "Fogo"
+        FUMACA = "fumaca", "Fumaça"
+
+    usuario_id      = models.CharField(max_length=64, db_index=True)
+    timestamp       = models.DateTimeField(db_index=True)
+    lat             = models.FloatField()
+    lon             = models.FloatField()
+    azimute         = models.FloatField()                          # graus 0–360
+    elevacao        = models.FloatField(null=True, blank=True)     # metros acima do nível do mar
+    precisao_gps    = models.FloatField(null=True, blank=True)     # metros
+    foto_url        = models.URLField(max_length=512, null=True, blank=True)
+    occurrence_type = models.CharField(
+        max_length=6,
+        choices=TipoOcorrencia.choices,
+        null=True, blank=True,
+    )
+    # 0–3 = baixo | 4–6 = médio | 7–10 = alto
+    severity_level  = models.IntegerField(
+        null=True, blank=True,
+        help_text="Severidade de 0 (mínimo) a 10 (máximo). 0–3 baixo, 4–6 médio, 7–10 alto.",
+    )
+    description     = models.TextField(null=True, blank=True)
+    criado_em       = models.DateTimeField(default=timezone.now)
 
     grupo = models.ForeignKey(
         Grupo,
@@ -84,6 +89,17 @@ class Observacao(models.Model):
             f"Obs #{self.pk} | {self.usuario_id} | "
             f"az={self.azimute:.1f}° | {self.timestamp:%d/%m %H:%M}"
         )
+
+    @property
+    def severity_label(self) -> str | None:
+        """Retorna 'baixo', 'medio' ou 'alto' baseado no severity_level numérico."""
+        if self.severity_level is None:
+            return None
+        if self.severity_level <= 3:
+            return "baixo"
+        if self.severity_level <= 6:
+            return "medio"
+        return "alto"
 
 
 class FocoEstimado(models.Model):
@@ -130,7 +146,7 @@ class Relatorio(models.Model):
         on_delete=models.CASCADE,
         related_name="relatorio",
     )
-    conteudo_json = models.JSONField()      # Django 3.1+ suporta JSONField nativo
+    conteudo_json = models.JSONField()
     gerado_em     = models.DateTimeField(default=timezone.now)
     enviado       = models.BooleanField(default=False)
 

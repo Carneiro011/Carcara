@@ -1,11 +1,7 @@
 """
 PROJETO CARCARÁ — Serializers DRF
 ===================================
-Equivalente aos schemas Pydantic do FastAPI.
 Responsáveis por validar entrada (POST) e formatar saída (GET).
-
-Diferença principal: no FastAPI usávamos Pydantic diretamente.
-No DRF usamos Serializers, que têm a mesma função mas com sintaxe Django.
 """
 
 from rest_framework import serializers
@@ -17,19 +13,33 @@ from .models import Observacao, Grupo, FocoEstimado, Relatorio
 class ObservacaoInputSerializer(serializers.Serializer):
     """
     Valida o payload enviado pelo aplicativo mobile.
-    Equivalente ao ObservacaoEntrada (Pydantic) do FastAPI.
+    severity_level: inteiro de 0 a 10.
+      0–3  → baixo
+      4–6  → médio
+      7–10 → alto
     """
-    lat          = serializers.FloatField(min_value=-90,  max_value=90)
-    lon          = serializers.FloatField(min_value=-180, max_value=180)
-    azimute      = serializers.FloatField(min_value=0,    max_value=360)
-    elevacao     = serializers.FloatField(required=False, allow_null=True,
-                                          min_value=-90, max_value=90)
-    precisao_gps = serializers.FloatField(required=False, allow_null=True,
-                                          min_value=0)
-    timestamp    = serializers.DateTimeField()
-    usuario_id   = serializers.CharField(min_length=1, max_length=64)
-    foto_url     = serializers.URLField(required=False, allow_null=True,
-                                        max_length=512)
+    lat             = serializers.FloatField(min_value=-90,  max_value=90)
+    lon             = serializers.FloatField(min_value=-180, max_value=180)
+    azimute         = serializers.FloatField(min_value=0,    max_value=360)
+    elevacao        = serializers.FloatField(required=False, allow_null=True,
+                                             min_value=-90,  max_value=90)
+    precisao_gps    = serializers.FloatField(required=False, allow_null=True,
+                                             min_value=0)
+    timestamp       = serializers.DateTimeField()
+    usuario_id      = serializers.CharField(min_length=1, max_length=64)
+    foto_url        = serializers.URLField(required=False, allow_null=True,
+                                           max_length=512)
+    occurrence_type = serializers.ChoiceField(
+        choices=["fogo", "fumaca"],
+        required=False, allow_null=True,
+    )
+    severity_level  = serializers.IntegerField(
+        required=False, allow_null=True,
+        min_value=0, max_value=10,
+    )
+    description     = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True,
+    )
 
     def validate_azimute(self, value):
         """Normaliza azimute para [0, 360)."""
@@ -40,13 +50,16 @@ class ObservacaoInputSerializer(serializers.Serializer):
 
 class ObservacaoSerializer(serializers.ModelSerializer):
     """Serializa uma Observacao para retorno na API."""
+    severity_label = serializers.CharField(source="severity_label", read_only=True)
 
     class Meta:
         model  = Observacao
         fields = [
             "id", "usuario_id", "lat", "lon", "azimute",
             "elevacao", "precisao_gps", "timestamp",
-            "foto_url", "grupo_id", "criado_em",
+            "foto_url", "occurrence_type",
+            "severity_level", "severity_label",
+            "description", "grupo_id", "criado_em",
         ]
 
 
@@ -63,17 +76,30 @@ class FocoEstimadoSerializer(serializers.ModelSerializer):
 
 
 class GrupoSerializer(serializers.ModelSerializer):
-    n_observacoes = serializers.SerializerMethodField()
-    foco          = FocoEstimadoSerializer(source="foco_estimado",
-                                           read_only=True)
+    n_observacoes  = serializers.SerializerMethodField()
+    severity_label = serializers.SerializerMethodField()
+    foco           = FocoEstimadoSerializer(source="foco_estimado", read_only=True)
 
     class Meta:
         model  = Grupo
-        fields = ["id", "status", "criado_em", "atualizado_em",
-                  "n_observacoes", "foco"]
+        fields = [
+            "id", "status", "criado_em", "atualizado_em",
+            "n_observacoes", "severity_media", "severity_label", "foco",
+        ]
 
     def get_n_observacoes(self, obj):
         return obj.observacoes.count()
+
+    def get_severity_label(self, obj):
+        """Converte a média numérica do grupo em rótulo semântico."""
+        media = obj.severity_media
+        if media is None:
+            return None
+        if media <= 3:
+            return "baixo"
+        if media <= 6:
+            return "medio"
+        return "alto"
 
 
 class RelatorioSerializer(serializers.ModelSerializer):

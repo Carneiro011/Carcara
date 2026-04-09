@@ -1,10 +1,10 @@
 """
 PROJETO CARCARÁ — Views DRF (com autenticação JWT)
 ====================================================
-Todas as views agora exigem token JWT válido via:
+Todas as views exigem token JWT válido via:
     Authorization: Bearer <access_token>
 
-Exceção: MapaDadosView e mapa_view são públicos (leitura de mapa).
+Exceções públicas (sem autenticação): MapaDadosView, mapa_view.
 """
 
 import math
@@ -17,14 +17,19 @@ from django.views import View
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from .models import Observacao, Grupo, FocoEstimado, Relatorio, StatusGrupo
+from .models import (
+    Observacao, Grupo, FocoEstimado, Relatorio,
+    ConfiguracaoSistema, StatusGrupo,
+)
 from .serializers import (
     ObservacaoInputSerializer,
     ObservacaoSerializer,
     GrupoSerializer,
     FocoEstimadoSerializer,
     RelatorioSerializer,
+    ConfiguracaoSistemaSerializer,
 )
 from observacoes.services.geo_utils.grupo_service import (
     atribuir_ou_criar_grupo,
@@ -35,23 +40,61 @@ logger = logging.getLogger("carcara")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Configurações do Sistema  [somente staff]
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ConfiguracaoSistemaView(APIView):
+    """
+    GET  /api/configuracoes/   → visualizar configurações      [autenticado]
+    PATCH /api/configuracoes/  → alterar configurações         [somente staff]
+    """
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAdminUser()]
+
+    def get(self, request):
+        config = ConfiguracaoSistema.get()
+        return Response(ConfiguracaoSistemaSerializer(config).data)
+
+    def patch(self, request):
+        config = ConfiguracaoSistema.get()
+        serializer = ConfiguracaoSistemaSerializer(config, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        logger.info("Configurações atualizadas por %s", request.user.username)
+        return Response(serializer.data)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Observações
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ObservacaoViewSet(viewsets.ViewSet):
     """
-    POST /api/observacoes/        → receber nova observação      [autenticado]
-    GET  /api/observacoes/        → listar observações           [autenticado]
-    GET  /api/observacoes/{id}/   → detalhar observação          [autenticado]
+    POST /api/observacoes/        → enviar nova observação      [autenticado]
+    GET  /api/observacoes/        → listar observações          [autenticado]
+    GET  /api/observacoes/{id}/   → detalhar observação         [autenticado]
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def list(self, request):
-        """Lista observações com filtro opcional por usuario_id."""
+        """Lista observações com filtros opcionais."""
         qs = Observacao.objects.select_related("grupo")
-        usuario_id = request.query_params.get("usuario_id")
+
+        usuario_id      = request.query_params.get("usuario_id")
+        tipo_ocorrencia = request.query_params.get("tipo_ocorrencia")
+        severidade      = request.query_params.get("severidade")
+
         if usuario_id:
             qs = qs.filter(usuario_id=usuario_id)
+        if tipo_ocorrencia:
+            qs = qs.filter(tipo_ocorrencia=tipo_ocorrencia)
+        if severidade:
+            qs = qs.filter(severidade=severidade)
+
         limite = min(int(request.query_params.get("limite", 50)), 500)
         qs = qs[:limite]
         return Response(ObservacaoSerializer(qs, many=True).data)
@@ -77,14 +120,18 @@ class ObservacaoViewSet(viewsets.ViewSet):
 
         d = serializer.validated_data
         obs = Observacao.objects.create(
-            usuario_id=d["usuario_id"],
-            timestamp=d["timestamp"],
-            lat=d["lat"],
-            lon=d["lon"],
-            azimute=d["azimute"],
-            elevacao=d.get("elevacao"),
-            precisao_gps=d.get("precisao_gps"),
-            foto_url=d.get("foto_url"),
+            usuario_id      = d["usuario_id"],
+            timestamp       = d["timestamp"],
+            lat             = d["lat"],
+            lon             = d["lon"],
+            elevacao        = d.get("elevacao"),
+            azimute         = d["azimute"],
+            pitch           = d.get("pitch"),
+            precisao_gps    = d.get("precisao_gps"),
+            tipo_ocorrencia = d.get("occurrence_type"),
+            severidade      = d.get("severity_level"),
+            descricao       = d.get("description", ""),
+            foto_url        = d.get("photo_url"),
         )
 
         grupo = atribuir_ou_criar_grupo(obs)
@@ -95,10 +142,7 @@ class ObservacaoViewSet(viewsets.ViewSet):
             "Nova observação #%s criada por %s (grupo #%s)",
             obs.pk, request.user.username, grupo.pk,
         )
-        return Response(
-            ObservacaoSerializer(obs).data,
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(ObservacaoSerializer(obs).data, status=status.HTTP_201_CREATED)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -109,31 +153,29 @@ class GrupoViewSet(viewsets.ViewSet):
     """
     GET  /api/grupos/                  → listar grupos            [autenticado]
     GET  /api/grupos/{id}/             → detalhar grupo           [autenticado]
-    POST /api/grupos/{id}/processar/   → reprocessar grupo        [staff]
+    POST /api/grupos/{id}/processar/   → reprocessar grupo        [somente staff]
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def list(self, request):
-        qs = Grupo.objects.prefetch_related("observacoes").select_related(
-            "foco_estimado"
-        )
+        qs = Grupo.objects.prefetch_related("observacoes").select_related("foco_estimado")
+
         status_filtro = request.query_params.get("status")
         if status_filtro:
             if status_filtro not in StatusGrupo.values:
                 return Response(
-                    {"detail": f"Status inválido: {status_filtro}"},
+                    {"detalhe": f"Status inválido: {status_filtro}"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             qs = qs.filter(status=status_filtro)
+
         limite = min(int(request.query_params.get("limite", 20)), 100)
         qs = qs[:limite]
         return Response(GrupoSerializer(qs, many=True).data)
 
     def retrieve(self, request, pk=None):
         grupo = get_object_or_404(
-            Grupo.objects.prefetch_related("observacoes").select_related(
-                "foco_estimado"
-            ),
+            Grupo.objects.prefetch_related("observacoes").select_related("foco_estimado"),
             pk=pk,
         )
         return Response(GrupoSerializer(grupo).data)
@@ -142,7 +184,7 @@ class GrupoViewSet(viewsets.ViewSet):
         detail=True,
         methods=["post"],
         url_path="processar",
-        permission_classes=[permissions.IsAdminUser],  # só staff pode reprocessar
+        permission_classes=[permissions.IsAdminUser],
     )
     def reprocessar(self, request, pk=None):
         """
@@ -152,7 +194,7 @@ class GrupoViewSet(viewsets.ViewSet):
         grupo = get_object_or_404(Grupo, pk=pk)
         if not grupo.observacoes.exists():
             return Response(
-                {"detail": "O grupo não possui observações para processar."},
+                {"detalhe": "O grupo não possui observações para processar."},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         grupo.status = StatusGrupo.PENDENTE
@@ -202,11 +244,8 @@ class RelatorioViewSet(viewsets.ViewSet):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Mapa — GeoJSON + HTML Leaflet  (público — leitura de mapa não requer login)
+# Mapa — GeoJSON + HTML Leaflet  (público)
 # ══════════════════════════════════════════════════════════════════════════════
-
-RAIO_CONFIANCA = {"alto": 300, "medio": 1000, "baixo": 3000}
-
 
 def _ponto_azimute(lat, lon, azimute, distancia_m):
     """Calcula ponto a distancia_m metros na direção do azimute."""
@@ -233,13 +272,19 @@ class MapaDadosView(View):
     """
 
     def get(self, request):
-        features = []
+        config = ConfiguracaoSistema.get()
+        raio_confianca = {
+            "alto":  config.raio_confianca_alto_m,
+            "medio": config.raio_confianca_medio_m,
+            "baixo": config.raio_confianca_baixo_m,
+        }
 
+        features = []
         focos = FocoEstimado.objects.select_related("grupo").all()
         foco_por_grupo = {f.grupo_id: f for f in focos}
 
         for foco in focos:
-            raio = RAIO_CONFIANCA.get(foco.nivel_confianca, 2000)
+            raio = raio_confianca.get(foco.nivel_confianca, 2000)
             features.append({
                 "type": "Feature",
                 "geometry": {
@@ -247,15 +292,15 @@ class MapaDadosView(View):
                     "coordinates": [foco.lon_foco, foco.lat_foco],
                 },
                 "properties": {
-                    "tipo":             "foco",
-                    "id":               foco.pk,
-                    "grupo_id":         foco.grupo_id,
-                    "nivel_confianca":  foco.nivel_confianca,
-                    "raio_m":           raio,
+                    "tipo":              "foco",
+                    "id":                foco.pk,
+                    "grupo_id":          foco.grupo_id,
+                    "nivel_confianca":   foco.nivel_confianca,
+                    "raio_m":            raio,
                     "distancia_media_m": foco.distancia_media_m,
-                    "n_observacoes":    foco.n_observacoes,
-                    "residuo_medio_m":  foco.residuo_medio_m,
-                    "calculado_em":     foco.calculado_em.isoformat(),
+                    "n_observacoes":     foco.n_observacoes,
+                    "residuo_medio_m":   foco.residuo_medio_m,
+                    "calculado_em":      foco.calculado_em.isoformat(),
                 },
             })
 
@@ -271,23 +316,25 @@ class MapaDadosView(View):
                 )
                 comp_linha = min(max(dist * 1.2, 1000), 15_000)
 
-            lat_fim, lon_fim = _ponto_azimute(
-                obs.lat, obs.lon, obs.azimute, comp_linha
-            )
+            lat_fim, lon_fim = _ponto_azimute(obs.lat, obs.lon, obs.azimute, comp_linha)
 
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [obs.lon, obs.lat]},
                 "properties": {
-                    "tipo":         "observador",
-                    "id":           obs.pk,
-                    "usuario_id":   obs.usuario_id,
-                    "azimute":      obs.azimute,
-                    "elevacao":     obs.elevacao,
-                    "precisao_gps": obs.precisao_gps,
-                    "timestamp":    obs.timestamp.isoformat(),
-                    "grupo_id":     obs.grupo_id,
-                    "foto_url":     obs.foto_url,
+                    "tipo":           "observador",
+                    "id":             obs.pk,
+                    "usuario_id":     obs.usuario_id,
+                    "azimute":        obs.azimute,
+                    "pitch":          obs.pitch,
+                    "elevacao":       obs.elevacao,
+                    "precisao_gps":   obs.precisao_gps,
+                    "tipo_ocorrencia": obs.tipo_ocorrencia,
+                    "severidade":     obs.severidade,
+                    "descricao":      obs.descricao,
+                    "timestamp":      obs.timestamp.isoformat(),
+                    "grupo_id":       obs.grupo_id,
+                    "foto_url":       obs.foto_url,
                 },
             })
 
@@ -311,6 +358,6 @@ class MapaDadosView(View):
             "features": features,
             "meta": {
                 "total_observacoes": observacoes.count(),
-                "total_focos": focos.count(),
+                "total_focos":       focos.count(),
             },
         })
