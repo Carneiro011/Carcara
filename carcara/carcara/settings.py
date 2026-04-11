@@ -25,8 +25,8 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
-    "rest_framework_simplejwt.token_blacklist",  # habilita blacklist p/ logout
-    "accounts",       # ← novo app de autenticação
+    "rest_framework_simplejwt.token_blacklist",
+    "accounts",
     "observacoes",
 ]
 
@@ -83,8 +83,6 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        # Por padrão todas as rotas exigem autenticação.
-        # Views públicas devem declarar: permission_classes = [AllowAny]
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_RENDERER_CLASSES": [
@@ -98,30 +96,18 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 50,
 }
 
-# ── Configuração do SimpleJWT ──────────────────────────────────────────────────
+# ── SimpleJWT ─────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
-    # Tempos de expiração
-    "ACCESS_TOKEN_LIFETIME":  timedelta(minutes=60),   # ajuste conforme necessidade
+    "ACCESS_TOKEN_LIFETIME":  timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-
-    # Rotaciona o refresh token a cada uso (mais seguro)
-    "ROTATE_REFRESH_TOKENS": True,
-    # Adiciona o refresh antigo à blacklist após rotação
+    "ROTATE_REFRESH_TOKENS":    True,
     "BLACKLIST_AFTER_ROTATION": True,
-
-    # Algoritmo e chave de assinatura
-    "ALGORITHM": "HS256",
-    "SIGNING_KEY": SECRET_KEY,
-
-    # Header esperado: Authorization: Bearer <token>
+    "ALGORITHM":    "HS256",
+    "SIGNING_KEY":  SECRET_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
-    "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
-
-    # Campo do modelo de usuário usado como identificador no token
+    "AUTH_HEADER_NAME":  "HTTP_AUTHORIZATION",
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
-
-    # Classe de token usada no login
     "TOKEN_OBTAIN_SERIALIZER": "accounts.serializers.CarcaraTokenObtainPairSerializer",
 }
 
@@ -141,6 +127,34 @@ STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ── Google OAuth ──────────────────────────────────────────────────────────────
+# Obter em: console.cloud.google.com → APIs & Services → Credentials
+# Instalar: pip install google-auth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+
+# ── E-mail (recuperação de senha) ─────────────────────────────────────────────
+# Em desenvolvimento: deixe EMAIL_BACKEND vazio → usa console (imprime no terminal)
+# Em produção:        configure SMTP no .env
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
+)
+EMAIL_HOST          = os.getenv("EMAIL_HOST",     "smtp.gmail.com")
+EMAIL_PORT          = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS       = True
+EMAIL_HOST_USER     = os.getenv("EMAIL_HOST_USER",     "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL  = os.getenv(
+    "DEFAULT_FROM_EMAIL", "Carcará <noreply@carcara.nupreds.br>"
+)
+
+# URL base do frontend — usada para montar o link de redefinição de senha
+# Ex: https://app.carcara.nupreds.br/redefinir-senha/<uid>/<token>/
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# Validade do token de reset em segundos (padrão Django = 3 dias)
+PASSWORD_RESET_TIMEOUT = int(os.getenv("PASSWORD_RESET_TIMEOUT", "259200"))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOGGING = {

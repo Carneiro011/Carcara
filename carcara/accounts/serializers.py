@@ -8,15 +8,16 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 
-# ── Token customizado (adiciona campos extra no payload) ──────────────────────
+# ── Token customizado ─────────────────────────────────────────────────────────
 
 class CarcaraTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        token["username"] = user.username
-        token["email"]    = user.email
-        token["is_staff"] = user.is_staff
+        token["username"]     = user.username
+        token["email"]        = user.email
+        token["is_staff"]     = user.is_staff
+        token["tipo_usuario"] = user.tipo_usuario
         return token
 
     def validate(self, attrs):
@@ -28,18 +29,19 @@ class CarcaraTokenObtainPairSerializer(TokenObtainPairSerializer):
             "nome_completo": self.user.nome_completo,
             "instituicao":   self.user.instituicao,
             "is_staff":      self.user.is_staff,
+            "tipo_usuario":  self.user.tipo_usuario,
         }
         return data
 
 
-# ── Registro de novo usuário ──────────────────────────────────────────────────
+# ── Registro ──────────────────────────────────────────────────────────────────
 
 class RegistroSerializer(serializers.ModelSerializer):
     password  = serializers.CharField(write_only=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, label="Confirmar senha")
 
     class Meta:
-        model  = None   # preenchido em __init_subclass__ via get_user_model()
+        model  = None
         fields = [
             "username", "email", "password", "password2",
             "nome_completo", "instituicao",
@@ -50,13 +52,6 @@ class RegistroSerializer(serializers.ModelSerializer):
             "instituicao":   {"required": False},
         }
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-
-    def __class_getitem__(cls, item):
-        return cls
-
-    # Resolve o model em tempo de execução (não de import)
     def __init__(self, *args, **kwargs):
         self.Meta.model = get_user_model()
         super().__init__(*args, **kwargs)
@@ -67,11 +62,10 @@ class RegistroSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        User = get_user_model()
-        return User.objects.create_user(**validated_data)
+        return get_user_model().objects.create_user(**validated_data)
 
 
-# ── Perfil do usuário autenticado ─────────────────────────────────────────────
+# ── Perfil ────────────────────────────────────────────────────────────────────
 
 class UsuarioPerfilSerializer(serializers.ModelSerializer):
     class Meta:
@@ -79,19 +73,37 @@ class UsuarioPerfilSerializer(serializers.ModelSerializer):
         fields = [
             "id", "username", "email",
             "nome_completo", "instituicao",
-            "is_staff", "criado_em",
+            "is_staff", "tipo_usuario", "criado_em",
         ]
-        read_only_fields = ["id", "username", "is_staff", "criado_em"]
+        read_only_fields = ["id", "username", "is_staff", "tipo_usuario", "criado_em"]
 
     def __init__(self, *args, **kwargs):
         self.Meta.model = get_user_model()
         super().__init__(*args, **kwargs)
 
 
-# ── Alteração de senha ────────────────────────────────────────────────────────
+# ── Alterar senha (logado) ────────────────────────────────────────────────────
 
 class AlterarSenhaSerializer(serializers.Serializer):
     senha_atual = serializers.CharField(write_only=True)
+    nova_senha  = serializers.CharField(write_only=True, validators=[validate_password])
+    nova_senha2 = serializers.CharField(write_only=True, label="Confirmar nova senha")
+
+    def validate(self, attrs):
+        if attrs["nova_senha"] != attrs["nova_senha2"]:
+            raise serializers.ValidationError({"nova_senha2": "As senhas não coincidem."})
+        return attrs
+
+
+# ── Recuperação de senha ──────────────────────────────────────────────────────
+
+class EsqueciSenhaSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class RedefinirSenhaSerializer(serializers.Serializer):
+    uid         = serializers.CharField()
+    token       = serializers.CharField()
     nova_senha  = serializers.CharField(write_only=True, validators=[validate_password])
     nova_senha2 = serializers.CharField(write_only=True, label="Confirmar nova senha")
 

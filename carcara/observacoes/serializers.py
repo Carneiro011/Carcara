@@ -13,6 +13,11 @@ from .models import Observacao, Grupo, FocoEstimado, Relatorio, ConfiguracaoSist
 class ObservacaoInputSerializer(serializers.Serializer):
     """
     Valida o payload enviado pelo aplicativo mobile.
+
+    azimute: OPCIONAL — dispositivos sem bússola/giroscópio omitem o campo
+             ou enviam null. A observação ainda é registrada e agrupada,
+             mas não entra no cálculo de triangulação.
+
     severity_level: inteiro de 0 a 10.
       0–3  → baixo
       4–6  → médio
@@ -20,15 +25,25 @@ class ObservacaoInputSerializer(serializers.Serializer):
     """
     lat             = serializers.FloatField(min_value=-90,  max_value=90)
     lon             = serializers.FloatField(min_value=-180, max_value=180)
-    azimute         = serializers.FloatField(min_value=0,    max_value=360)
-    elevacao        = serializers.FloatField(required=False, allow_null=True,
-                                             min_value=-90,  max_value=90)
-    precisao_gps    = serializers.FloatField(required=False, allow_null=True,
-                                             min_value=0)
+
+    # required=False + allow_null=True → totalmente opcional
+    azimute         = serializers.FloatField(
+        required=False, allow_null=True,
+        min_value=0, max_value=360,
+    )
+    elevacao        = serializers.FloatField(
+        required=False, allow_null=True,
+        min_value=-90, max_value=90,
+    )
+    precisao_gps    = serializers.FloatField(
+        required=False, allow_null=True,
+        min_value=0,
+    )
     timestamp       = serializers.DateTimeField()
     usuario_id      = serializers.CharField(min_length=1, max_length=64)
-    foto_url        = serializers.URLField(required=False, allow_null=True,
-                                           max_length=512)
+    foto_url        = serializers.URLField(
+        required=False, allow_null=True, max_length=512,
+    )
     occurrence_type = serializers.ChoiceField(
         choices=["fogo", "fumaca"],
         required=False, allow_null=True,
@@ -42,7 +57,9 @@ class ObservacaoInputSerializer(serializers.Serializer):
     )
 
     def validate_azimute(self, value):
-        """Normaliza azimute para [0, 360)."""
+        """Normaliza azimute para [0, 360) quando informado."""
+        if value is None:
+            return None
         return value % 360
 
 
@@ -51,16 +68,21 @@ class ObservacaoInputSerializer(serializers.Serializer):
 class ObservacaoSerializer(serializers.ModelSerializer):
     """Serializa uma Observacao para retorno na API."""
     severity_label = serializers.CharField(source="severity_label", read_only=True)
+    tem_azimute    = serializers.SerializerMethodField()
 
     class Meta:
         model  = Observacao
         fields = [
-            "id", "usuario_id", "lat", "lon", "azimute",
+            "id", "usuario_id", "lat", "lon",
+            "azimute", "tem_azimute",          # azimute pode ser null
             "elevacao", "precisao_gps", "timestamp",
             "foto_url", "occurrence_type",
             "severity_level", "severity_label",
             "description", "grupo_id", "criado_em",
         ]
+
+    def get_tem_azimute(self, obj):
+        return obj.azimute is not None
 
 
 class FocoEstimadoSerializer(serializers.ModelSerializer):
@@ -77,6 +99,7 @@ class FocoEstimadoSerializer(serializers.ModelSerializer):
 
 class GrupoSerializer(serializers.ModelSerializer):
     n_observacoes  = serializers.SerializerMethodField()
+    n_com_azimute  = serializers.SerializerMethodField()
     severity_label = serializers.SerializerMethodField()
     foco           = FocoEstimadoSerializer(source="foco_estimado", read_only=True)
 
@@ -84,11 +107,16 @@ class GrupoSerializer(serializers.ModelSerializer):
         model  = Grupo
         fields = [
             "id", "status", "criado_em", "atualizado_em",
-            "n_observacoes", "severity_media", "severity_label", "foco",
+            "n_observacoes", "n_com_azimute",
+            "severity_media", "severity_label", "foco",
         ]
 
     def get_n_observacoes(self, obj):
         return obj.observacoes.count()
+
+    def get_n_com_azimute(self, obj):
+        """Quantas observações do grupo têm azimute e participam da triangulação."""
+        return obj.observacoes.filter(azimute__isnull=False).count()
 
     def get_severity_label(self, obj):
         """Converte a média numérica do grupo em rótulo semântico."""
@@ -110,24 +138,13 @@ class RelatorioSerializer(serializers.ModelSerializer):
 
 
 class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
-    # ── Agrupamento ───────────────────────────────────────────────────────────
     raio_espacial_km = serializers.FloatField(
         min_value=0.1, max_value=50.0,
         help_text="Raio de agrupamento espacial em km (0.1–50).",
     )
-
-    # ── Raios do mapa ─────────────────────────────────────────────────────────
-    raio_confianca_alto_m = serializers.FloatField(
-        min_value=50.0, max_value=50000.0,
-    )
-    raio_confianca_medio_m = serializers.FloatField(
-        min_value=50.0, max_value=50000.0,
-    )
-    raio_confianca_baixo_m = serializers.FloatField(
-        min_value=50.0, max_value=50000.0,
-    )
-
-    # ── Confiança ALTO ────────────────────────────────────────────────────────
+    raio_confianca_alto_m = serializers.FloatField(min_value=50.0, max_value=50000.0)
+    raio_confianca_medio_m = serializers.FloatField(min_value=50.0, max_value=50000.0)
+    raio_confianca_baixo_m = serializers.FloatField(min_value=50.0, max_value=50000.0)
     min_obs_alto = serializers.IntegerField(
         min_value=1, max_value=100,
         help_text="Mínimo de observadores para confiança ALTA.",
@@ -140,8 +157,6 @@ class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
         min_value=100.0, max_value=100000.0,
         help_text="Distância média máxima (m) ao foco para confiança ALTA.",
     )
-
-    # ── Confiança MÉDIO ───────────────────────────────────────────────────────
     min_obs_medio = serializers.IntegerField(
         min_value=1, max_value=100,
         help_text="Mínimo de observadores para confiança MÉDIA.",
@@ -171,7 +186,6 @@ class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, data):
-        # min_obs_alto deve ser >= min_obs_medio
         alto  = data.get("min_obs_alto",  self.instance.min_obs_alto  if self.instance else 3)
         medio = data.get("min_obs_medio", self.instance.min_obs_medio if self.instance else 2)
         if alto < medio:

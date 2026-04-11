@@ -9,29 +9,29 @@ from .views import (
     LoginView,
     LogoutView,
     RegistroView,
+    GoogleLoginView,
     PerfilView,
     AlterarSenhaView,
+    EsqueciSenhaView,
+    RedefinirSenhaView,
 )
 
 urlpatterns = [
-    # Login → retorna access + refresh token
+    # ── Tokens JWT ────────────────────────────────────────────────────────────
     path("token/",          LoginView.as_view(),        name="token_obtain_pair"),
-
-    # Renovar access token usando o refresh token
     path("token/refresh/",  TokenRefreshView.as_view(), name="token_refresh"),
-
-    # Verificar se um token é válido
     path("token/verify/",   TokenVerifyView.as_view(),  name="token_verify"),
 
-    # Criar nova conta
+    # ── Conta ─────────────────────────────────────────────────────────────────
     path("registro/",       RegistroView.as_view(),     name="registro"),
-
-    # Logout (blacklist do refresh token)
     path("logout/",         LogoutView.as_view(),       name="logout"),
-
-    # Perfil do usuário autenticado (GET e PATCH)
     path("perfil/",         PerfilView.as_view(),       name="perfil"),
-
-    # Trocar senha
     path("alterar-senha/",  AlterarSenhaView.as_view(), name="alterar_senha"),
+
+    # ── Google OAuth ──────────────────────────────────────────────────────────
+    path("google/",         GoogleLoginView.as_view(),  name="google_login"),
+
+    # ── Recuperação de senha ──────────────────────────────────────────────────
+    path("esqueci-senha/",   EsqueciSenhaView.as_view(),   name="esqueci_senha"),
+    path("redefinir-senha/", RedefinirSenhaView.as_view(), name="redefinir_senha"),
 ]
