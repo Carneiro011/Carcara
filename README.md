@@ -1,484 +1,370 @@
-# 🦅 Projeto Carcará
-### Sistema de Localização de Focos de Incêndio por Triangulação
+# Projeto Carcará
+
+> Sistema de detecção e triangulação de focos de incêndio por observações georreferenciadas colaborativas.
+
+---
+
+## Índice
+
+- [Visão Geral](#visão-geral)
+- [Arquitetura](#arquitetura)
+- [Tecnologias](#tecnologias)
+- [Estrutura do Projeto](#estrutura-do-projeto)
+- [Instalação](#instalação)
+- [Configuração .env](#configuração-env)
+- [Migrations](#migrations)
+- [Rodando o Servidor](#rodando-o-servidor)
+- [Autenticação](#autenticação)
+- [Endpoints da API](#endpoints-da-api)
+- [Permissões](#permissões)
+- [Configurações do Sistema](#configurações-do-sistema)
+- [Checklist de Segurança](#checklist-de-segurança)
+- [Testes](#testes)
 
 ---
 
 ## Visão Geral
 
-O **Carcará** é um servidor central que recebe observações de usuários em campo (via aplicativo mobile), processa as direções de visão a partir das posições dos observadores e calcula a **localização provável de um foco de incêndio por triangulação geométrica**.
+O Carcará é uma API REST desenvolvida em Django + Django REST Framework que recebe observações de campo enviadas por um aplicativo mobile. Cada observação contém a posição GPS do observador, o azimute (direção da visada) e o ângulo de pitch (elevação acima do horizonte). O sistema agrupa observações próximas e aplica algoritmos de triangulação geoespacial para estimar a localização de focos de incêndio.
 
-Cada observação carrega a posição do observador (latitude, longitude e elevação), a direção da visada (azimute horizontal), o tipo de ocorrência e a severidade. Com duas ou mais observações de pontos distintos, o algoritmo cruza os vetores de visão e estima as coordenadas do foco. O nível de confiança da estimativa é calculado dinamicamente a partir de parâmetros configuráveis pelo staff.
+```
+Observador A ──azimute──►
+                          X  <- Foco estimado
+Observador B ──azimute──►
+```
+
+---
+
+## Arquitetura
+
+```
+carcara/
+├── accounts/          App de autenticação (JWT + Google OAuth)
+├── observacoes/       App principal (observações, grupos, focos, mapa)
+└── carcara/           Pacote de configuração Django
+```
+
+Fluxo principal:
+
+```
+App Mobile
+   |
+   ├── POST /auth/token/         -> Login -> JWT
+   |
+   └── POST /api/observacoes/    -> Nova observação
+              |
+              v
+         atribuir_ou_criar_grupo()
+              |
+              v
+         processar_grupo_async()
+              |
+              v
+         triangulação geoespacial
+              |
+              v
+         FocoEstimado + Relatorio
+```
+
+---
+
+## Tecnologias
+
+| Camada | Tecnologia | Versão |
+|---|---|---|
+| Framework | Django | 6.0.3 |
+| API REST | Django REST Framework | 3.17 |
+| Autenticação | djangorestframework-simplejwt | >= 5.3 |
+| OAuth | google-auth | >= 2.0 |
+| Banco de dados | PostgreSQL | >= 14 |
+| Driver DB | psycopg2 | 3.3.3 |
+| Cálculo numérico | NumPy | 2.4.2 |
+| Tipos geoespaciais | GeoAlchemy2 | 0.18.4 |
+| CORS | django-cors-headers | — |
 
 ---
 
 ## Estrutura do Projeto
 
 ```
-Carcara/
+carcara/
+├── accounts/
+│   ├── migrations/
+│   │   ├── 0001_initial.py
+│   │   └── 0002_usuario_telefone_username_limit.py
+│   ├── admin.py
+│   ├── apps.py
+│   ├── models.py          # Usuario (AbstractUser customizado)
+│   ├── serializers.py     # login, registro, perfil, senha, recuperação
+│   ├── tests.py           # 26 testes automatizados
+│   ├── urls.py            # rotas /auth/...
+│   └── views.py           # todas as views de autenticação
+├── observacoes/
+│   ├── migrations/
+│   ├── services/
+│   │   └── geo_utils/     # triangulação, agrupamento
+│   ├── models.py
+│   ├── serializers.py
+│   ├── urls.py
+│   └── views.py
+├── carcara/
+│   ├── settings.py
+│   ├── urls.py
+│   ├── asgi.py
+│   └── wsgi.py
+├── manage.py
 ├── requirements.txt
-├── README.md
-└── carcara/
-    ├── manage.py
-    ├── carcara/                         ← Configurações do projeto Django
-    │   ├── settings.py
-    │   ├── urls.py
-    │   ├── asgi.py
-    │   └── wsgi.py
-    ├── accounts/                        ← App de autenticação (JWT)
-    │   ├── models.py                    ← Modelo Usuario (AbstractUser)
-    │   ├── serializers.py
-    │   ├── views.py
-    │   ├── urls.py
-    │   └── admin.py
-    └── observacoes/                     ← App principal
-        ├── models.py                    ← Observacao, Grupo, FocoEstimado,
-        │                                   Relatorio, ConfiguracaoSistema
-        ├── serializers.py
-        ├── views.py
-        ├── urls.py
-        ├── mapa.py                      ← Página Leaflet (HTML inline)
-        ├── migrations/
-        │   ├── 0001_initial.py
-        │   ├── 0002_configuracaosistema_completo.py
-        │   └── 0003_configuracao_confianca.py
-        ├── reports/
-        │   └── generate_report.py      ← Geração de relatório JSON
-        └── services/
-            └── geo_utils/
-                ├── geo_utils.py        ← Conversão WGS84 ↔ UTM
-                ├── distance_calc.py    ← Haversine, agrupamento Union-Find
-                ├── grupo_service.py    ← Agrupamento espaço-temporal
-                └── triangulation.py   ← Algoritmo de triangulação (MQ)
+└── .env.example
 ```
 
 ---
 
 ## Instalação
 
+### Pré-requisitos
+
+- Python 3.11+
+- PostgreSQL 14+
+
+### Passos
+
 ```bash
-# 1. Clone o repositório
-git clone <url-do-repositorio>
-cd Carcara/carcara
+# 1. Clonar o repositório
+git clone https://github.com/nupreds/carcara.git
+cd carcara/carcara
 
-# 2. Crie e ative o ambiente virtual
+# 2. Criar e ativar ambiente virtual
 python -m venv venv
-venv\Scripts\activate         # Windows
-# source venv/bin/activate    # Linux/Mac
+source venv/bin/activate        # Linux/Mac
+venv\Scripts\activate           # Windows
 
-# 3. Instale as dependências
+# 3. Instalar dependências
 pip install -r requirements.txt
+pip install google-auth
 
-# 4. Configure as variáveis de ambiente (veja seção abaixo)
+# 4. Configurar variáveis de ambiente
+cp .env.example .env
+# editar .env com seus valores reais
 
-# 5. Rode as migrations
+# 5. Criar banco de dados
+createdb carcara_db
+
+# 6. Rodar migrations
 python manage.py migrate
 
-# 6. Crie um superusuário
+# 7. Criar superusuário
 python manage.py createsuperuser
-
-# 7. Inicie o servidor
-python manage.py runserver
 ```
 
 ---
 
-## Variáveis de Ambiente
+## Configuração .env
 
-Crie um arquivo `.env` na mesma pasta do `manage.py`:
+```
+# Django
+DEBUG=false
+SECRET_KEY=          # python -c "import secrets; print(secrets.token_hex(64))"
+ALLOWED_HOSTS=       # ex: api.carcara.nupreds.br
 
-```env
-DEBUG=true
-SECRET_KEY=sua-chave-secreta-aqui
-ALLOWED_HOSTS=localhost,127.0.0.1
-
+# Banco de dados
 DB_NAME=carcara_db
 DB_USER=carcara_user
-DB_PASSWORD=carcara_pass
+DB_PASSWORD=
 DB_HOST=localhost
 DB_PORT=5432
 
-CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+# CORS
+CORS_ORIGINS=        # ex: https://app.carcara.nupreds.br
+
+# Google OAuth
+GOOGLE_CLIENT_ID=    # console.cloud.google.com
+
+# E-mail
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+DEFAULT_FROM_EMAIL=Carcará <noreply@carcara.br>
+FRONTEND_URL=
+PASSWORD_RESET_TIMEOUT=259200
+
+# Rate limiting
+THROTTLE_ANON=20/hour
+THROTTLE_USER=200/hour
+THROTTLE_LOGIN=10/hour
 ```
 
----
-
-## Modelo do Banco de Dados
-
-```
-observacoes              grupos               focos_estimados
-──────────────────       ──────────────       ────────────────────
-id (PK)                  id (PK)              id (PK)
-usuario_id               status               grupo_id (FK)
-timestamp                severity_media       lat_foco
-lat                      criado_em            lon_foco
-lon                      atualizado_em        distancia_media_m
-azimute                                       residuo_medio_m
-elevacao                                      n_observacoes
-precisao_gps                                  nivel_confianca
-foto_url                                      distancia_elevacao_m
-occurrence_type                               calculado_em
-severity_level
-description
-grupo_id (FK)            relatorios           configuracoes_sistema
-criado_em                ──────────────       ─────────────────────
-                         id (PK)              id (PK)
-                         foco_id (FK)         raio_espacial_km
-                         conteudo_json        raio_confianca_alto_m
-                         gerado_em            raio_confianca_medio_m
-                         enviado              raio_confianca_baixo_m
-                                              min_obs_alto
-                                              residuo_alto_m
-                                              dist_media_alto_m
-                                              min_obs_medio
-                                              angulo_min_graus
-                                              residuo_medio_m
-```
-
-### Campos da Observação
-
-| Campo | Tipo | Obrigatório | Descrição |
-|-------|------|-------------|-----------|
-| `usuario_id` | string | ✅ | Identificador do usuário no app |
-| `timestamp` | datetime | ✅ | Momento da observação (ISO 8601) |
-| `lat` | float | ✅ | Latitude do observador (WGS84) |
-| `lon` | float | ✅ | Longitude do observador (WGS84) |
-| `azimute` | float | ✅ | Direção horizontal da visada em graus (0–360°) |
-| `elevacao` | float | ❌ | Altitude do observador em metros (nível do mar) |
-| `precisao_gps` | float | ❌ | Precisão do GPS em metros |
-| `occurrence_type` | string | ❌ | Tipo: `fogo` ou `fumaca` |
-| `severity_level` | int | ❌ | Severidade de 0 a 10 (0–3 baixo, 4–6 médio, 7–10 alto) |
-| `description` | string | ❌ | Descrição livre da ocorrência |
-| `foto_url` | string | ❌ | URL da foto enviada pelo app |
-
-### Modelo de Usuário
-
-O modelo `Usuario` estende `AbstractUser` do Django com os campos adicionais:
-
-| Campo | Tipo | Descrição |
-|-------|------|-----------|
-| `nome_completo` | string | Nome completo do usuário |
-| `instituicao` | string | Instituição (ex: Corpo de Bombeiros, ICMBio) |
-| `tipo_usuario` | string | `ADMIN` ou `USUARIO` |
-| `email` | string | E-mail único (obrigatório) |
+> Nunca commite o `.env` no Git. Adicione ao `.gitignore`.
 
 ---
 
-## Autenticação JWT
-
-A API usa **JSON Web Tokens (JWT)**. O fluxo é:
-
-1. Faça login → receba `access` (válido 60 min) e `refresh` (válido 7 dias)
-2. Envie o `access` em toda requisição protegida:
-   ```
-   Authorization: Bearer <access_token>
-   ```
-3. Quando o `access` expirar, use o `refresh` para renovar
-
----
-
-## Endpoints — Autenticação `/auth/`
-
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/auth/token/` | Login | Não |
-| `POST` | `/auth/token/refresh/` | Renovar token | Não |
-| `POST` | `/auth/token/verify/` | Verificar token | Não |
-| `POST` | `/auth/registro/` | Criar conta | Não |
-| `GET` | `/auth/perfil/` | Ver perfil | Sim |
-| `PATCH` | `/auth/perfil/` | Atualizar perfil | Sim |
-| `POST` | `/auth/alterar-senha/` | Trocar senha | Sim |
-| `POST` | `/auth/logout/` | Logout (blacklist) | Sim |
-
----
-
-## Endpoints — API Principal
-
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `GET` | `/api/configuracoes/` | Ver configurações do sistema | Sim |
-| `PATCH` | `/api/configuracoes/` | Alterar configurações | Staff |
-| `POST` | `/api/observacoes/` | Enviar nova observação | Sim |
-| `GET` | `/api/observacoes/` | Listar observações | Sim |
-| `GET` | `/api/observacoes/{id}/` | Detalhar observação | Sim |
-| `GET` | `/api/grupos/` | Listar grupos | Sim |
-| `GET` | `/api/grupos/{id}/` | Detalhar grupo | Sim |
-| `POST` | `/api/grupos/{id}/processar/` | Reprocessar triangulação | Staff |
-| `GET` | `/api/focos/` | Listar focos estimados | Sim |
-| `GET` | `/api/focos/{id}/` | Detalhar foco | Sim |
-| `GET` | `/api/relatorios/{foco_id}/` | Relatório completo (JSON) | Sim |
-| `GET` | `/api/mapa/dados/` | GeoJSON para o mapa | Não |
-| `GET` | `/mapa/` | Visualização Leaflet interativa | Não |
-
----
-
-## Payload — POST `/api/observacoes/`
-
-```json
-{
-  "usuario_id": "brigadista_01",
-  "timestamp": "2026-04-08T14:32:10",
-  "lat": -10.9172,
-  "lon": -37.0731,
-  "azimute": 73.2,
-  "elevacao": 342.0,
-  "precisao_gps": 12.0,
-  "foto_url": "https://storage.carcara.br/fotos/001.jpg",
-  "occurrence_type": "fumaca",
-  "severity_level": 8,
-  "description": "Coluna de fumaça densa avistada na encosta norte"
-}
-```
-
-**Resposta (201):**
-```json
-{
-  "id": 42,
-  "usuario_id": "brigadista_01",
-  "lat": -10.9172,
-  "lon": -37.0731,
-  "azimute": 73.2,
-  "severity_level": 8,
-  "severity_label": "alto",
-  "grupo_id": 7,
-  "criado_em": "2026-04-08T14:32:11Z"
-}
-```
-
----
-
-## Payload — PATCH `/api/configuracoes/`
-
-Requer `is_staff=True` ou `is_superuser=True`.
-
-```json
-{
-  "raio_espacial_km": 3.0,
-  "raio_confianca_alto_m": 500.0,
-  "raio_confianca_medio_m": 1500.0,
-  "raio_confianca_baixo_m": 3000.0,
-  "min_obs_alto": 3,
-  "residuo_alto_m": 500.0,
-  "dist_media_alto_m": 5000.0,
-  "min_obs_medio": 2,
-  "angulo_min_graus": 15.0,
-  "residuo_medio_m": 500.0
-}
-```
-
-Todos os campos são opcionais (PATCH parcial). Validações aplicadas:
-
-- `raio_espacial_km`: entre 0.1 e 50.0 km
-- `min_obs_alto` deve ser ≥ `min_obs_medio`
-- Raios de mapa: entre 50 m e 50.000 m
-- Resíduos: entre 10 m e 10.000 m
-- Ângulo: entre 1° e 90°
-
----
-
-## Exemplo com curl
+## Migrations
 
 ```bash
-# 1. Login
-curl -X POST http://localhost:8000/auth/token/ \
+python manage.py migrate
+python manage.py migrate accounts 0002       # telefone + limite username
+python manage.py migrate observacoes 0006    # azimute opcional
+python manage.py flushexpiredtokens          # limpar blacklist (executar periodicamente)
+```
+
+---
+
+## Rodando o Servidor
+
+```bash
+# Desenvolvimento
+python manage.py runserver
+
+# Produção
+gunicorn carcara.wsgi:application --workers 4 --bind 0.0.0.0:8000
+```
+
+---
+
+## Autenticação
+
+A API usa JWT via djangorestframework-simplejwt.
+
+### Login
+
+```bash
+curl -X POST https://api.carcara.nupreds.br/auth/token/ \
   -H "Content-Type: application/json" \
-  -d '{"username": "brigadista_01", "password": "suasenha"}'
+  -d '{"username": "joao", "password": "Senha@123"}'
+```
 
-# 2. Enviar observação
-curl -X POST http://localhost:8000/api/observacoes/ \
-  -H "Authorization: Bearer SEU_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "usuario_id": "brigadista_01",
-    "timestamp": "2026-04-08T14:32:10",
-    "lat": -10.9172,
-    "lon": -37.0731,
-    "azimute": 73.2,
-    "elevacao": 342.0,
-    "precisao_gps": 12.0,
-    "occurrence_type": "fumaca",
-    "severity_level": 8,
-    "description": "Coluna de fumaça na encosta norte"
-  }'
+Resposta:
+```json
+{
+  "access": "eyJ...",
+  "refresh": "eyJ...",
+  "usuario": {
+    "id": 1, "username": "joao", "email": "joao@nupreds.br",
+    "nome_completo": "João Silva", "telefone": "+55 88 99999-9999",
+    "is_staff": false
+  }
+}
+```
 
-# 3. Ver grupos formados
-curl -X GET http://localhost:8000/api/grupos/ \
-  -H "Authorization: Bearer SEU_ACCESS_TOKEN"
+### Usando o token
 
-# 4. Ver foco estimado
-curl -X GET http://localhost:8000/api/focos/1/ \
-  -H "Authorization: Bearer SEU_ACCESS_TOKEN"
+```bash
+curl https://api.carcara.nupreds.br/api/observacoes/ \
+  -H "Authorization: Bearer eyJ..."
+```
 
-# 5. Alterar configurações (requer staff)
-curl -X PATCH http://localhost:8000/api/configuracoes/ \
-  -H "Authorization: Bearer SEU_ACCESS_TOKEN_STAFF" \
-  -H "Content-Type: application/json" \
-  -d '{"raio_espacial_km": 5.0, "min_obs_alto": 4}'
+### Login com Google
+
+```bash
+curl -X POST https://api.carcara.nupreds.br/auth/google/ \
+  -d '{"id_token": "<token_do_sdk_google>"}'
 ```
 
 ---
 
-## Agrupamento Espaço-Temporal
+## Endpoints da API
 
-Observações são agrupadas automaticamente ao chegar. Uma nova observação entra em um grupo existente se:
+### Autenticação (/auth/)
 
-- A diferença de tempo com a observação mais recente do grupo for **≤ 30 minutos**
-- A distância entre os observadores for **≤ raio configurado** (padrão: **3 km**)
+| Método | Endpoint | Descrição | Auth |
+|---|---|---|---|
+| POST | /auth/token/ | Login | Não |
+| POST | /auth/token/refresh/ | Renovar token | Não |
+| POST | /auth/token/verify/ | Verificar token | Não |
+| POST | /auth/registro/ | Criar conta (retorna token) | Não |
+| POST | /auth/google/ | Login com Google | Não |
+| POST | /auth/logout/ | Logout (blacklist) | Sim |
+| GET | /auth/perfil/ | Dados do usuário | Sim |
+| PATCH | /auth/perfil/ | Atualizar perfil | Sim |
+| POST | /auth/alterar-senha/ | Trocar senha | Sim |
+| POST | /auth/esqueci-senha/ | Reset por e-mail | Não |
+| POST | /auth/redefinir-senha/ | Redefinir com token | Não |
 
-Caso contrário, um novo grupo é criado. Após cada nova observação, o grupo é reprocessado em background e um novo `FocoEstimado` é calculado.
+### API Principal (/api/)
 
-O raio de agrupamento pode ser ajustado via `PATCH /api/configuracoes/` por usuários com permissão **staff** ou **admin**.
+| Método | Endpoint | Descrição | Permissão |
+|---|---|---|---|
+| GET/POST | /api/observacoes/ | Observações | Autenticado |
+| GET | /api/grupos/ | Grupos de observações | Autenticado |
+| POST | /api/grupos/{id}/processar/ | Reprocessar triangulação | Staff |
+| GET | /api/focos/ | Focos estimados | Autenticado |
+| GET | /api/relatorios/{id}/ | Relatório do foco | Autenticado |
+| GET/PATCH | /api/configuracoes/ | Configurações do sistema | Autenticado/Staff |
+| GET | /api/mapa/dados/ | GeoJSON do mapa | Público |
 
----
-
-## Algoritmo de Triangulação
-
-### Problema
-
-Cada observador está em uma posição conhecida `(x₀, y₀)` em coordenadas UTM e aponta o celular para a fumaça, gerando um **vetor de visão** definido pelo azimute `θ`:
-
-```
-d = (cos θ,  sin θ)
-L(t) = O + t · d     (t ≥ 0)
-```
-
-Com N ≥ 2 observadores, o algoritmo encontra o ponto `P_foco` que **minimiza a soma das distâncias perpendiculares** a todas as linhas de visão.
-
-### Formulação Matricial (Mínimos Quadrados)
-
-Para cada linha de visão `i` com vetor unitário `d_i` e origem `O_i`:
-
-```
-M_i = I − d_i · d_iᵀ
-
-A = Σ M_i
-b = Σ M_i · O_i
-
-P_foco = A⁻¹ · b
-```
-
-### Estimativa por Elevação (Pitch)
-
-Quando o ângulo de elevação está disponível, estima-se a distância horizontal ao foco:
-
-```
-r = Δh / tan(φ)
-```
-
-onde `Δh` é a diferença de altitude entre observador e referência (padrão: 50 m). Serve como validação cruzada com a triangulação por azimute.
-
-### Nível de Confiança (parametrizado)
-
-A confiança é calculada em conjunção lógica (E), avaliada em ordem:
-
-| Nível | Condição |
-|-------|----------|
-| **Alto** | n_obs ≥ `min_obs_alto` **E** resíduo ≤ `residuo_alto_m` **E** dist_média ≤ `dist_media_alto_m` |
-| **Médio** | n_obs ≥ `min_obs_medio` **E** ângulo_min ≥ `angulo_min_graus` **E** resíduo ≤ `residuo_medio_m` |
-| **Baixo** | qualquer outro caso |
-
-**Valores padrão:**
-
-| Parâmetro | Padrão |
-|-----------|--------|
-| `min_obs_alto` | 3 observadores |
-| `residuo_alto_m` | 500 m |
-| `dist_media_alto_m` | 5.000 m |
-| `min_obs_medio` | 2 observadores |
-| `angulo_min_graus` | 15° |
-| `residuo_medio_m` | 500 m |
-
-Todos os parâmetros são ajustáveis pelo staff via `PATCH /api/configuracoes/`.
-
----
-
-## Mapa Interativo
-
-Acesse: `http://localhost:8000/mapa/`
-
-Visualização em tempo real com Leaflet (OpenStreetMap) mostrando:
-
-- 📍 Posição dos observadores
-- ➡️ Linhas de visada (azimute)
-- 🔥 Focos estimados com raio de confiança colorido por nível
-- Atualização automática a cada 15 segundos
-
----
-
-## Painel Admin
-
-Acesse: `http://localhost:8000/admin/`
-
-Gerencie usuários, observações, grupos, focos e configurações diretamente pelo painel do Django.
-
----
-
-## Relatório Gerado
-
-Cada foco processado gera um relatório JSON armazenado no banco e acessível via `GET /api/relatorios/{foco_id}/`:
+### Payload — Enviar Observação
 
 ```json
 {
-  "projeto": "CARCARÁ — Sistema de Localização de Focos de Incêndio",
-  "versao": "1.0",
-  "gerado_em": "2026-04-08T14:35:00Z",
-  "identificacao": {
-    "foco_id": 1,
-    "grupo_id": 7
-  },
-  "localizacao_estimada": {
-    "latitude": -10.89341,
-    "longitude": -37.06127,
-    "google_maps": "https://www.google.com/maps?q=-10.89341,-37.06127",
-    "waze": "https://waze.com/ul?ll=-10.89341%2C-37.06127&navigate=yes"
-  },
-  "metricas": {
-    "n_observacoes": 3,
-    "distancia_media_m": 2847.3,
-    "distancia_media_km": 2.85,
-    "residuo_medio_m": 124.7,
-    "nivel_confianca": "alto",
-    "interpretacao_confianca": "Estimativa com alta confiabilidade..."
-  },
-  "observacoes": [...],
-  "midias": {
-    "total_fotos": 2,
-    "urls_fotos": ["https://..."]
-  },
-  "acoes_recomendadas": [
-    "✅ Acionar brigada de combate ao incêndio.",
-    "✅ Notificar Corpo de Bombeiros com coordenadas.",
-    "📡 Monitorar novas observações no sistema CARCARÁ."
-  ]
+  "usuario_id":      "user_abc123",
+  "timestamp":       "2025-04-21T14:30:00Z",
+  "lat":             -3.7172,
+  "lon":             -38.5433,
+  "azimute":         145.5,
+  "elevacao":        12.3,
+  "precisao_gps":    8.5,
+  "occurrence_type": "fogo",
+  "severity_level":  7,
+  "description":     "Fumaça espessa visível"
 }
 ```
+
+`azimute` e `elevacao` são opcionais — dispositivos sem bússola podem omiti-los.
 
 ---
 
 ## Permissões
 
-| Ação | Usuário comum | Staff | Admin/Superuser |
-|------|:---:|:---:|:---:|
-| Enviar observação | ✅ | ✅ | ✅ |
-| Ver grupos e focos | ✅ | ✅ | ✅ |
-| Ver configurações | ✅ | ✅ | ✅ |
-| Alterar configurações | ❌ | ✅ | ✅ |
-| Reprocessar grupo | ❌ | ✅ | ✅ |
-| Painel admin | ❌ | ✅ | ✅ |
+| Recurso | Usuário | Admin |
+|---|---|---|
+| Enviar e ver observações | Sim | Sim |
+| Ver configurações | Sim | Sim |
+| Editar configurações | Não | Sim |
+| Reprocessar triangulação | Não | Sim |
+| Painel /admin/ | Não | Sim |
 
 ---
 
-## Dependências Principais
+## Configurações do Sistema
 
-| Pacote | Versão | Função |
-|--------|--------|--------|
-| Django | ≥ 5.0 | Framework web |
-| djangorestframework | ≥ 3.15 | API REST |
-| djangorestframework-simplejwt | — | Autenticação JWT |
-| django-cors-headers | ≥ 4.3 | CORS para app mobile |
-| psycopg2-binary | ≥ 2.9 | Conector PostgreSQL |
-| numpy | ≥ 1.26 | Álgebra linear (triangulação) |
-| pyproj | ≥ 3.6 | Conversão WGS84 ↔ UTM |
-| python-dotenv | ≥ 1.0 | Variáveis de ambiente |
+| Parâmetro | Padrão | Descrição |
+|---|---|---|
+| raio_espacial_km | 3 km | Raio de agrupamento |
+| min_obs_alto | 3 | Mínimo observadores (ALTA) |
+| residuo_alto_m | 500 m | Resíduo máximo (ALTA) |
+| dist_media_alto_m | 5000 m | Distância média máx (ALTA) |
+| min_obs_medio | 2 | Mínimo observadores (MÉDIA) |
+| angulo_min_graus | 15° | Ângulo mínimo entre visadas |
+| residuo_medio_m | 500 m | Resíduo máximo (MÉDIA) |
+| raio_confianca_alto_m | 500 m | Círculo no mapa (ALTA) |
+| raio_confianca_medio_m | 1500 m | Círculo no mapa (MÉDIA) |
+| raio_confianca_baixo_m | 3000 m | Círculo no mapa (BAIXA) |
 
 ---
 
+## Checklist de Segurança
+
+| Item | Status |
+|---|---|
+| JWT em todas as rotas | OK |
+| Autorização user / staff | OK |
+| Serializers sem password | OK |
+| Variáveis no .env | OK |
+| HTTPS em produção | OK |
+| CORS restrito | OK |
+| Rate limit login (10/hora) | OK |
+| Rate limit geral | OK |
+| Blacklist no logout | OK |
+| Rotação de refresh token | OK |
+
+---
+
+## Testes
+
+```bash
+python manage.py test accounts
+coverage run manage.py test accounts && coverage report -m
+```
+
+Cobertura: registro, login, refresh, logout, blacklist, perfil, alterar senha, recuperação por e-mail, proteção JWT e restrição de staff — 26 casos de teste.''''

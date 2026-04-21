@@ -28,6 +28,7 @@ class CarcaraTokenObtainPairSerializer(TokenObtainPairSerializer):
             "email":         self.user.email,
             "nome_completo": self.user.nome_completo,
             "instituicao":   self.user.instituicao,
+            "telefone":      self.user.telefone,
             "is_staff":      self.user.is_staff,
             "tipo_usuario":  self.user.tipo_usuario,
         }
@@ -37,19 +38,43 @@ class CarcaraTokenObtainPairSerializer(TokenObtainPairSerializer):
 # ── Registro ──────────────────────────────────────────────────────────────────
 
 class RegistroSerializer(serializers.ModelSerializer):
-    password  = serializers.CharField(write_only=True, validators=[validate_password])
-    password2 = serializers.CharField(write_only=True, label="Confirmar senha")
+    # Senha: mín 8, máx 64 caracteres + validadores do Django
+    password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=64,
+        validators=[validate_password],
+        error_messages={
+            "min_length": "A senha deve ter pelo menos 8 caracteres.",
+            "max_length": "A senha deve ter no máximo 64 caracteres.",
+        },
+    )
+    password2 = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=64,
+        label="Confirmar senha",
+    )
 
     class Meta:
-        model  = None
+        model  = None   # resolvido em __init__
         fields = [
             "username", "email", "password", "password2",
-            "nome_completo", "instituicao",
+            "nome_completo", "instituicao", "telefone",
         ]
         extra_kwargs = {
+            "username":      {
+                "min_length": 3,
+                "max_length": 30,
+                "error_messages": {
+                    "min_length": "O nome de usuário deve ter pelo menos 3 caracteres.",
+                    "max_length": "O nome de usuário deve ter no máximo 30 caracteres.",
+                },
+            },
             "email":         {"required": True},
             "nome_completo": {"required": False},
             "instituicao":   {"required": False},
+            "telefone":      {"required": False},
         }
 
     def __init__(self, *args, **kwargs):
@@ -72,22 +97,36 @@ class UsuarioPerfilSerializer(serializers.ModelSerializer):
         model  = None
         fields = [
             "id", "username", "email",
-            "nome_completo", "instituicao",
+            "nome_completo", "instituicao", "telefone",
             "is_staff", "tipo_usuario", "criado_em",
         ]
-        read_only_fields = ["id", "username", "is_staff", "tipo_usuario", "criado_em"]
+        read_only_fields = ["id", "username", "email", "is_staff", "tipo_usuario", "criado_em"]
 
     def __init__(self, *args, **kwargs):
         self.Meta.model = get_user_model()
         super().__init__(*args, **kwargs)
 
 
-# ── Alterar senha (logado) ────────────────────────────────────────────────────
+# ── Alterar senha ─────────────────────────────────────────────────────────────
 
 class AlterarSenhaSerializer(serializers.Serializer):
     senha_atual = serializers.CharField(write_only=True)
-    nova_senha  = serializers.CharField(write_only=True, validators=[validate_password])
-    nova_senha2 = serializers.CharField(write_only=True, label="Confirmar nova senha")
+    nova_senha  = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=64,
+        validators=[validate_password],
+        error_messages={
+            "min_length": "A senha deve ter pelo menos 8 caracteres.",
+            "max_length": "A senha deve ter no máximo 64 caracteres.",
+        },
+    )
+    nova_senha2 = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=64,
+        label="Confirmar nova senha",
+    )
 
     def validate(self, attrs):
         if attrs["nova_senha"] != attrs["nova_senha2"]:
@@ -104,8 +143,22 @@ class EsqueciSenhaSerializer(serializers.Serializer):
 class RedefinirSenhaSerializer(serializers.Serializer):
     uid         = serializers.CharField()
     token       = serializers.CharField()
-    nova_senha  = serializers.CharField(write_only=True, validators=[validate_password])
-    nova_senha2 = serializers.CharField(write_only=True, label="Confirmar nova senha")
+    nova_senha  = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=64,
+        validators=[validate_password],
+        error_messages={
+            "min_length": "A senha deve ter pelo menos 8 caracteres.",
+            "max_length": "A senha deve ter no máximo 64 caracteres.",
+        },
+    )
+    nova_senha2 = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=64,
+        label="Confirmar nova senha",
+    )
 
     def validate(self, attrs):
         if attrs["nova_senha"] != attrs["nova_senha2"]:

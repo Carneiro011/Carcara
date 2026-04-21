@@ -1,5 +1,9 @@
 """
 PROJETO CARCARÁ — Configurações Django
+========================================
+Lê tudo do .env via os.getenv().
+Em desenvolvimento: DEBUG=true, sem HTTPS forçado.
+Em produção:        DEBUG=false, HTTPS e rate limit ativos automaticamente.
 """
 
 import os
@@ -30,7 +34,6 @@ INSTALLED_APPS = [
     "observacoes",
 ]
 
-# ── Modelo de usuário customizado ─────────────────────────────────────────────
 AUTH_USER_MODEL = "accounts.Usuario"
 
 # ── Middleware ─────────────────────────────────────────────────────────────────
@@ -77,7 +80,7 @@ DATABASES = {
     }
 }
 
-# ── DRF + JWT ─────────────────────────────────────────────────────────────────
+# ── DRF + JWT + Rate limit ────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -87,19 +90,37 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",
+        # BrowsableAPIRenderer só em desenvolvimento
+        *( ["rest_framework.renderers.BrowsableAPIRenderer"] if DEBUG else [] ),
     ],
     "DEFAULT_PARSER_CLASSES": [
         "rest_framework.parsers.JSONParser",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    # Proteção contra força bruta e abuso da API.
+    # Limites configuráveis via .env sem alterar código.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",   # não autenticado
+        "rest_framework.throttling.UserRateThrottle",   # autenticado
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # Anônimo: rotas públicas (login, registro, esqueci-senha)
+        # 20/hora é suficiente para uso legítimo e bloqueia força bruta
+        "anon": os.getenv("THROTTLE_ANON",  "20/hour"),
+        # Usuário autenticado: envio de observações, consultas
+        "user": os.getenv("THROTTLE_USER", "200/hour"),
+        # Escopo especial para login — mais restritivo
+        "login": os.getenv("THROTTLE_LOGIN", "10/hour"),
+    },
 }
 
 # ── SimpleJWT ─────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME":  timedelta(minutes=60),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ACCESS_TOKEN_LIFETIME":    timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME":   timedelta(days=7),
     "ROTATE_REFRESH_TOKENS":    True,
     "BLACKLIST_AFTER_ROTATION": True,
     "ALGORITHM":    "HS256",
@@ -112,10 +133,39 @@ SIMPLE_JWT = {
 }
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# Em produção, CORS_ORIGINS deve conter SOMENTE o domínio do frontend.
+# Ex: CORS_ORIGINS=https://app.carcara.nupreds.br
 CORS_ALLOWED_ORIGINS = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:8000,http://localhost:3000"
+    "http://localhost:8000,http://localhost:3000",
 ).split(",")
+
+# Cookies de sessão nunca são enviados em requests cross-origin
+CORS_ALLOW_CREDENTIALS = False
+
+# ── HTTPS e segurança (só ativo quando DEBUG=false) ───────────────────────────
+if not DEBUG:
+    # Redireciona HTTP → HTTPS automaticamente
+    SECURE_SSL_REDIRECT = True
+
+    # Cookies só trafegam em HTTPS
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE    = True
+
+    # Instrui o browser a usar HTTPS por 1 ano (HSTS)
+    # includeSubDomains garante subdomínios também
+    SECURE_HSTS_SECONDS            = 31_536_000  # 1 ano
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD            = True
+
+    # Impede que o browser adivinhe o content-type (sniffing)
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+
+    # Proteção contra clickjacking (header X-Frame-Options: DENY)
+    X_FRAME_OPTIONS = "DENY"
+
+    # Só confia em proxies reversos que passam o header correto
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # ── Internacionalização ───────────────────────────────────────────────────────
 LANGUAGE_CODE = "pt-br"
@@ -129,13 +179,9 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
-# Obter em: console.cloud.google.com → APIs & Services → Credentials
-# Instalar: pip install google-auth
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 # ── E-mail (recuperação de senha) ─────────────────────────────────────────────
-# Em desenvolvimento: deixe EMAIL_BACKEND vazio → usa console (imprime no terminal)
-# Em produção:        configure SMTP no .env
 EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",
     "django.core.mail.backends.console.EmailBackend",
@@ -148,13 +194,8 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL  = os.getenv(
     "DEFAULT_FROM_EMAIL", "Carcará <noreply@carcara.nupreds.br>"
 )
-
-# URL base do frontend — usada para montar o link de redefinição de senha
-# Ex: https://app.carcara.nupreds.br/redefinir-senha/<uid>/<token>/
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
-# Validade do token de reset em segundos (padrão Django = 3 dias)
-PASSWORD_RESET_TIMEOUT = int(os.getenv("PASSWORD_RESET_TIMEOUT", "259200"))
+FRONTEND_URL             = os.getenv("FRONTEND_URL", "http://localhost:3000")
+PASSWORD_RESET_TIMEOUT   = int(os.getenv("PASSWORD_RESET_TIMEOUT", "259200"))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOGGING = {

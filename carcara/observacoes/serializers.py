@@ -18,6 +18,9 @@ class ObservacaoInputSerializer(serializers.Serializer):
              ou enviam null. A observação ainda é registrada e agrupada,
              mas não entra no cálculo de triangulação.
 
+    elevacao: ângulo de pitch em graus (0–90) — quanto acima do horizonte
+              o usuário está mirando. NÃO é altitude geográfica.
+
     severity_level: inteiro de 0 a 10.
       0–3  → baixo
       4–6  → médio
@@ -31,19 +34,17 @@ class ObservacaoInputSerializer(serializers.Serializer):
         required=False, allow_null=True,
         min_value=0, max_value=360,
     )
+    # pitch: 0° = horizonte, 90° = olhando reto para cima — nunca negativo
     elevacao        = serializers.FloatField(
         required=False, allow_null=True,
-        min_value=-90, max_value=90,
+        min_value=0, max_value=90,
     )
-    precisao_gps    = serializers.FloatField(
-        required=False, allow_null=True,
-        min_value=0,
-    )
+    precisao_gps    = serializers.FloatField(required=False, allow_null=True,
+                                             min_value=0)
     timestamp       = serializers.DateTimeField()
     usuario_id      = serializers.CharField(min_length=1, max_length=64)
-    foto_url        = serializers.URLField(
-        required=False, allow_null=True, max_length=512,
-    )
+    foto_url        = serializers.URLField(required=False, allow_null=True,
+                                           max_length=512)
     occurrence_type = serializers.ChoiceField(
         choices=["fogo", "fumaca"],
         required=False, allow_null=True,
@@ -67,14 +68,14 @@ class ObservacaoInputSerializer(serializers.Serializer):
 
 class ObservacaoSerializer(serializers.ModelSerializer):
     """Serializa uma Observacao para retorno na API."""
-    severity_label = serializers.CharField(source="severity_label", read_only=True)
+    severity_label = serializers.CharField(read_only=True)  # corrigido: sem source=
     tem_azimute    = serializers.SerializerMethodField()
 
     class Meta:
         model  = Observacao
         fields = [
             "id", "usuario_id", "lat", "lon",
-            "azimute", "tem_azimute",          # azimute pode ser null
+            "azimute", "tem_azimute",
             "elevacao", "precisao_gps", "timestamp",
             "foto_url", "occurrence_type",
             "severity_level", "severity_label",
@@ -138,13 +139,18 @@ class RelatorioSerializer(serializers.ModelSerializer):
 
 
 class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
+    # ── Agrupamento ───────────────────────────────────────────────────────────
     raio_espacial_km = serializers.FloatField(
         min_value=0.1, max_value=50.0,
         help_text="Raio de agrupamento espacial em km (0.1–50).",
     )
-    raio_confianca_alto_m = serializers.FloatField(min_value=50.0, max_value=50000.0)
+
+    # ── Raios do mapa ─────────────────────────────────────────────────────────
+    raio_confianca_alto_m  = serializers.FloatField(min_value=50.0, max_value=50000.0)
     raio_confianca_medio_m = serializers.FloatField(min_value=50.0, max_value=50000.0)
     raio_confianca_baixo_m = serializers.FloatField(min_value=50.0, max_value=50000.0)
+
+    # ── Confiança ALTO ────────────────────────────────────────────────────────
     min_obs_alto = serializers.IntegerField(
         min_value=1, max_value=100,
         help_text="Mínimo de observadores para confiança ALTA.",
@@ -157,6 +163,8 @@ class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
         min_value=100.0, max_value=100000.0,
         help_text="Distância média máxima (m) ao foco para confiança ALTA.",
     )
+
+    # ── Confiança MÉDIO ───────────────────────────────────────────────────────
     min_obs_medio = serializers.IntegerField(
         min_value=1, max_value=100,
         help_text="Mínimo de observadores para confiança MÉDIA.",

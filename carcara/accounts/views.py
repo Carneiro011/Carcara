@@ -3,7 +3,7 @@ PROJETO CARCARÁ — Views de autenticação
 =========================================
 
 Endpoints:
-    POST /auth/registro/              → criar conta (já retorna tokens JWT)
+    POST /auth/registro/              → criar conta (já retorna tokens)
     POST /auth/token/                 → login username/password
     POST /auth/token/refresh/         → renovar access token
     POST /auth/token/verify/          → verificar se token é válido
@@ -32,7 +32,17 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.views import TokenObtainPairView
+
+
+class LoginRateThrottle(AnonRateThrottle):
+    """
+    Throttle dedicado ao endpoint de login.
+    Usa o escopo 'login' definido em THROTTLE_RATES (padrão: 10/hora).
+    Muito mais restritivo que o AnonRateThrottle geral (20/hora).
+    """
+    scope = "login"
 
 from .serializers import (
     CarcaraTokenObtainPairSerializer,
@@ -47,10 +57,10 @@ logger = logging.getLogger("carcara")
 User   = get_user_model()
 
 
-# ── Helpers internos ──────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _tokens_para(user):
-    """Gera access + refresh JWT com claims customizados do Carcará."""
+    """Gera access + refresh JWT com claims customizados."""
     refresh = RefreshToken.for_user(user)
     refresh["username"] = user.username
     refresh["email"]    = user.email
@@ -60,7 +70,6 @@ def _tokens_para(user):
         "refresh": str(refresh),
     }
 
-
 def _usuario_dict(user):
     return {
         "id":            user.pk,
@@ -68,8 +77,8 @@ def _usuario_dict(user):
         "email":         user.email,
         "nome_completo": user.nome_completo,
         "instituicao":   user.instituicao,
+        "telefone":      user.telefone,
         "is_staff":      user.is_staff,
-        "tipo_usuario":  user.tipo_usuario,
     }
 
 
@@ -79,7 +88,6 @@ class LoginView(TokenObtainPairView):
     """
     POST /auth/token/
     Body: { "username": "...", "password": "..." }
-    Retorna: { "access": "...", "refresh": "...", "usuario": {...} }
     """
     serializer_class = CarcaraTokenObtainPairSerializer
 
@@ -90,7 +98,6 @@ class LogoutView(APIView):
     """
     POST /auth/logout/
     Body: { "refresh": "<refresh_token>" }
-    Invalida o refresh token via blacklist.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -118,13 +125,11 @@ class LogoutView(APIView):
 class RegistroView(generics.CreateAPIView):
     """
     POST /auth/registro/
-    Cria conta e JÁ retorna tokens JWT — sem precisar fazer login depois.
+    Cria conta e já retorna tokens JWT.
     """
+    queryset           = User.objects.all()
     serializer_class   = RegistroSerializer
     permission_classes = [permissions.AllowAny]
-
-    def get_queryset(self):
-        return User.objects.all()
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -153,12 +158,12 @@ class GoogleLoginView(APIView):
       2. SDK do Google autentica e devolve um id_token
       3. App envia esse id_token para este endpoint
       4. Validamos com o Google, buscamos/criamos o usuário
-      5. Retornamos tokens JWT do Carcará — igual ao login normal
+      5. Retornamos tokens JWT do Carcará
 
-    Configurar em settings.py (ou .env):
+    Requer em settings.py:
         GOOGLE_CLIENT_ID = "xxxx.apps.googleusercontent.com"
 
-    Instalar dependência:
+    Instalar:
         pip install google-auth
     """
     permission_classes = [permissions.AllowAny]
@@ -179,7 +184,7 @@ class GoogleLoginView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Valida o id_token diretamente com a API do Google
+        # Valida o id_token com a API do Google
         try:
             payload = google_id_token.verify_oauth2_token(
                 id_token_str,
@@ -193,7 +198,7 @@ class GoogleLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        email          = payload.get("email", "").lower().strip()
+        email          = payload.get("email", "").lower()
         nome           = payload.get("name", "")
         google_sub     = payload.get("sub", "")   # ID único do usuário no Google
         email_verified = payload.get("email_verified", False)
@@ -204,13 +209,13 @@ class GoogleLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Busca pelo e-mail ou cria a conta automaticamente
+        # Busca ou cria o usuário pelo e-mail
         user, criado = User.objects.get_or_create(
             email=email,
             defaults={
                 "username":      f"google_{google_sub}",
                 "nome_completo": nome,
-                # Senha inutilizável — acesso exclusivamente via Google
+                # Senha inutilizável — acesso só via Google para esta conta
                 "password":      User.objects.make_random_password(),
             },
         )
@@ -218,7 +223,7 @@ class GoogleLoginView(APIView):
         if criado:
             logger.info("Conta criada via Google para %s", email)
         else:
-            logger.info("Login via Google: %s", email)
+            logger.info("Login Google: %s", email)
 
         return Response(
             {
@@ -235,8 +240,8 @@ class GoogleLoginView(APIView):
 
 class PerfilView(generics.RetrieveUpdateAPIView):
     """
-    GET   /auth/perfil/  → dados do usuário logado
-    PATCH /auth/perfil/  → atualiza nome_completo / instituicao
+    GET   /auth/perfil/
+    PATCH /auth/perfil/
     """
     serializer_class   = UsuarioPerfilSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -252,7 +257,6 @@ class AlterarSenhaView(APIView):
     """
     POST /auth/alterar-senha/
     Para quem está logado e quer trocar a senha sabendo a atual.
-    Body: { "senha_atual": "...", "nova_senha": "...", "nova_senha2": "..." }
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -280,38 +284,37 @@ class EsqueciSenhaView(APIView):
     POST /auth/esqueci-senha/
     Body: { "email": "..." }
 
-    Envia e-mail com link de redefinição.
-    Sempre retorna 200 — nunca revela se o e-mail existe ou não.
+    Envia e-mail com link de redefinição. Sempre retorna 200 para
+    não revelar quais e-mails estão cadastrados.
 
-    Configurar em settings.py / .env:
-        EMAIL_BACKEND       = "django.core.mail.backends.smtp.EmailBackend"
-        EMAIL_HOST          = "smtp.gmail.com"
-        EMAIL_PORT          = 587
-        EMAIL_USE_TLS       = True
-        EMAIL_HOST_USER     = "noreply@carcara.br"
-        EMAIL_HOST_PASSWORD = "<senha de app>"
-        DEFAULT_FROM_EMAIL  = "Carcará <noreply@carcara.br>"
-        FRONTEND_URL        = "https://app.carcara.nupreds.br"
-        PASSWORD_RESET_TIMEOUT = 259200  # 3 dias (padrão Django)
-
-    Em desenvolvimento, deixe EMAIL_BACKEND como console (imprime no terminal).
+    Requer em settings.py:
+        EMAIL_BACKEND      = "django.core.mail.backends.smtp.EmailBackend"
+        EMAIL_HOST         = "smtp.gmail.com"          # ou seu servidor SMTP
+        EMAIL_PORT         = 587
+        EMAIL_USE_TLS      = True
+        EMAIL_HOST_USER    = "noreply@carcara.br"
+        EMAIL_HOST_PASSWORD = os.getenv("EMAIL_PASSWORD")
+        DEFAULT_FROM_EMAIL = "Carcará <noreply@carcara.br>"
+        FRONTEND_URL       = "https://app.carcara.nupreds.br"
+        PASSWORD_RESET_TIMEOUT = 259200  # 3 dias em segundos (padrão Django)
     """
     permission_classes = [permissions.AllowAny]
-
-    _RESPOSTA_PADRAO = {
-        "detail": "Se o e-mail estiver cadastrado, você receberá as instruções em breve."
-    }
 
     def post(self, request):
         serializer = EsqueciSenhaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        email = serializer.validated_data["email"].lower().strip()
+        email = serializer.validated_data["email"].lower()
+
+        # Resposta padrão — igual independente de o e-mail existir
+        resposta_padrao = Response(
+            {"detail": "Se o e-mail estiver cadastrado, você receberá as instruções em breve."},
+            status=status.HTTP_200_OK,
+        )
 
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            # Resposta idêntica — não vaza se o e-mail existe
-            return Response(self._RESPOSTA_PADRAO, status=status.HTTP_200_OK)
+            return resposta_padrao
 
         uid   = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
@@ -339,7 +342,7 @@ class EsqueciSenhaView(APIView):
         except Exception as exc:
             logger.error("Falha ao enviar e-mail de recuperação: %s", exc)
 
-        return Response(self._RESPOSTA_PADRAO, status=status.HTTP_200_OK)
+        return resposta_padrao
 
 
 # ── Recuperação de senha — passo 2: redefinir com token ──────────────────────
@@ -354,8 +357,8 @@ class RedefinirSenhaView(APIView):
         "nova_senha2": "..."
     }
 
-    Valida o token, redefine a senha e já retorna tokens JWT
-    — usuário volta logado direto, sem passar pelo login de novo.
+    Após validar o token, redefine a senha e já retorna os tokens JWT
+    — usuário volta logado direto.
     """
     permission_classes = [permissions.AllowAny]
 
@@ -383,7 +386,7 @@ class RedefinirSenhaView(APIView):
         user.save()
         logger.info("Senha redefinida via e-mail: %s", user.username)
 
-        # Já retorna logado — sem ir para a tela de login
+        # Já retorna logado — sem precisar ir para a tela de login
         return Response(
             {
                 "detail":  "Senha redefinida com sucesso.",
