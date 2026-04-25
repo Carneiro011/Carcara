@@ -55,8 +55,8 @@ class Observacao(models.Model):
     timestamp       = models.DateTimeField(db_index=True)
     lat             = models.FloatField()
     lon             = models.FloatField()
-    azimute         = models.FloatField(null=True, blank=True)            # graus 0-360 (opcional: nem todo dispositivo tem bussola)
-    elevacao        = models.FloatField(null=True, blank=True)     # metros acima do nível do mar
+    azimute         = models.FloatField()                          # graus 0–360
+    elevacao        = models.FloatField(null=True, blank=True)     # pitch em graus 0-90 (NAO e altitude)
     precisao_gps    = models.FloatField(null=True, blank=True)     # metros
     foto_url        = models.URLField(max_length=512, null=True, blank=True)
     occurrence_type = models.CharField(
@@ -85,12 +85,8 @@ class Observacao(models.Model):
         ordering            = ["-timestamp"]
 
     def __str__(self):
-        az = f"{self.azimute:.1f}\u00b0" if self.azimute is not None else "sem-azimute"
+        az = f"{self.azimute:.1f}graus" if self.azimute is not None else "sem-azimute"
         return f"Obs #{self.pk} | {self.usuario_id} | az={az} | {self.timestamp:%d/%m %H:%M}"
-
-    def tem_azimute(self):
-        """Indica se esta observação pode participar da triangulação."""
-        return self.azimute is not None
 
     @property
     def severity_label(self) -> str | None:

@@ -9,7 +9,6 @@ from .views import (
     LoginView,
     LogoutView,
     RegistroView,
-    GoogleLoginView,
     PerfilView,
     AlterarSenhaView,
     EsqueciSenhaView,
@@ -27,9 +26,6 @@ urlpatterns = [
     path("logout/",         LogoutView.as_view(),       name="logout"),
     path("perfil/",         PerfilView.as_view(),       name="perfil"),
     path("alterar-senha/",  AlterarSenhaView.as_view(), name="alterar_senha"),
-
-    # ── Google OAuth ──────────────────────────────────────────────────────────
-    path("google/",         GoogleLoginView.as_view(),  name="google_login"),
 
     # ── Recuperação de senha ──────────────────────────────────────────────────
     path("esqueci-senha/",   EsqueciSenhaView.as_view(),   name="esqueci_senha"),

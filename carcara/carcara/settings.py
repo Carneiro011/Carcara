@@ -178,8 +178,6 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ── Google OAuth ──────────────────────────────────────────────────────────────
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 # ── E-mail (recuperação de senha) ─────────────────────────────────────────────
 EMAIL_BACKEND = os.getenv(

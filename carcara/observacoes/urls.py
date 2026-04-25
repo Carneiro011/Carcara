@@ -34,3 +34,4 @@ urlpatterns = [
     # Página HTML Leaflet (público)
     path("mapa/", mapa_view, name="mapa"),
 ]
+# Auditoria adicionada manualmente

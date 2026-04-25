@@ -11,7 +11,6 @@ Endpoints:
     GET  /auth/perfil/                → dados do usuário autenticado
     PATCH /auth/perfil/               → atualizar nome_completo / instituicao
     POST /auth/alterar-senha/         → trocar senha (usuário logado)
-    POST /auth/google/                → login/cadastro via Google OAuth
     POST /auth/esqueci-senha/         → envia e-mail de recuperação
     POST /auth/redefinir-senha/       → redefine senha com token do e-mail
 """
@@ -25,8 +24,6 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.conf import settings
 
-from google.oauth2 import id_token as google_id_token
-from google.auth.transport import requests as google_requests
 
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -54,6 +51,9 @@ from .serializers import (
 )
 
 logger = logging.getLogger("carcara")
+
+# Auditoria
+from observacoes.audit import registrar_auditoria, TipoAcao
 User   = get_user_model()
 
 
@@ -111,6 +111,7 @@ class LogoutView(APIView):
         try:
             RefreshToken(refresh_token).blacklist()
             logger.info("Logout: %s", request.user.username)
+            registrar_auditoria(request, TipoAcao.LOGOUT)
             return Response({"detail": "Logout realizado com sucesso."})
         except Exception as exc:
             logger.warning("Logout falhou: %s", exc)
@@ -136,6 +137,7 @@ class RegistroView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         logger.info("Novo usuário registrado: %s", user.username)
+        registrar_auditoria(request, TipoAcao.REGISTRO, objeto=user)
         return Response(
             {
                 "detail":  "Conta criada com sucesso.",
@@ -143,96 +145,6 @@ class RegistroView(generics.CreateAPIView):
                 "usuario": _usuario_dict(user),
             },
             status=status.HTTP_201_CREATED,
-        )
-
-
-# ── Login via Google OAuth ────────────────────────────────────────────────────
-
-class GoogleLoginView(APIView):
-    """
-    POST /auth/google/
-    Body: { "id_token": "<token_retornado_pelo_SDK_Google>" }
-
-    Fluxo no app mobile/frontend:
-      1. Usuário toca "Entrar com Google"
-      2. SDK do Google autentica e devolve um id_token
-      3. App envia esse id_token para este endpoint
-      4. Validamos com o Google, buscamos/criamos o usuário
-      5. Retornamos tokens JWT do Carcará
-
-    Requer em settings.py:
-        GOOGLE_CLIENT_ID = "xxxx.apps.googleusercontent.com"
-
-    Instalar:
-        pip install google-auth
-    """
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        id_token_str = request.data.get("id_token")
-        if not id_token_str:
-            return Response(
-                {"detail": "id_token é obrigatório."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        client_id = getattr(settings, "GOOGLE_CLIENT_ID", None)
-        if not client_id:
-            logger.error("GOOGLE_CLIENT_ID não configurado em settings.py")
-            return Response(
-                {"detail": "Login com Google não está configurado no servidor."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        # Valida o id_token com a API do Google
-        try:
-            payload = google_id_token.verify_oauth2_token(
-                id_token_str,
-                google_requests.Request(),
-                client_id,
-            )
-        except ValueError as exc:
-            logger.warning("Google id_token inválido: %s", exc)
-            return Response(
-                {"detail": "Token do Google inválido ou expirado."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        email          = payload.get("email", "").lower()
-        nome           = payload.get("name", "")
-        google_sub     = payload.get("sub", "")   # ID único do usuário no Google
-        email_verified = payload.get("email_verified", False)
-
-        if not email or not email_verified:
-            return Response(
-                {"detail": "E-mail do Google não verificado."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Busca ou cria o usuário pelo e-mail
-        user, criado = User.objects.get_or_create(
-            email=email,
-            defaults={
-                "username":      f"google_{google_sub}",
-                "nome_completo": nome,
-                # Senha inutilizável — acesso só via Google para esta conta
-                "password":      User.objects.make_random_password(),
-            },
-        )
-
-        if criado:
-            logger.info("Conta criada via Google para %s", email)
-        else:
-            logger.info("Login Google: %s", email)
-
-        return Response(
-            {
-                "detail":  "Autenticado com Google.",
-                "criado":  criado,
-                **_tokens_para(user),
-                "usuario": _usuario_dict(user),
-            },
-            status=status.HTTP_201_CREATED if criado else status.HTTP_200_OK,
         )
 
 
@@ -274,6 +186,7 @@ class AlterarSenhaView(APIView):
         user.set_password(serializer.validated_data["nova_senha"])
         user.save()
         logger.info("Senha alterada: %s", user.username)
+        registrar_auditoria(request, TipoAcao.SENHA_ALTERADA, objeto=user)
         return Response({"detail": "Senha alterada com sucesso."})
 
 
@@ -385,6 +298,7 @@ class RedefinirSenhaView(APIView):
         user.set_password(d["nova_senha"])
         user.save()
         logger.info("Senha redefinida via e-mail: %s", user.username)
+        registrar_auditoria(request, TipoAcao.SENHA_REDEFINIDA, objeto=user)
 
         # Já retorna logado — sem precisar ir para a tela de login
         return Response(

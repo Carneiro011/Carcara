@@ -37,6 +37,7 @@ from observacoes.services.geo_utils.grupo_service import (
 )
 
 logger = logging.getLogger("carcara")
+from observacoes.audit import registrar_auditoria, TipoAcao
 
 
 class _IsStaffOrAdmin(permissions.BasePermission):
@@ -148,6 +149,11 @@ class ObservacaoViewSet(viewsets.ViewSet):
             "Nova observação #%s criada por %s (grupo #%s)",
             obs.pk, request.user.username, grupo.pk,
         )
+        registrar_auditoria(
+            request, TipoAcao.OBSERVACAO_CRIADA, objeto=obs,
+            detalhes={"grupo_id": grupo.pk, "lat": obs.lat, "lon": obs.lon,
+                       "azimute": obs.azimute, "severity_level": obs.severity_level},
+        )
         return Response(ObservacaoSerializer(obs).data, status=status.HTTP_201_CREATED)
 
 
@@ -207,6 +213,7 @@ class GrupoViewSet(viewsets.ViewSet):
         grupo.save(update_fields=["status"])
         processar_grupo_async(grupo.pk)
         logger.info("Reprocessamento do grupo #%s iniciado por %s", pk, request.user.username)
+        registrar_auditoria(request, TipoAcao.GRUPO_REPROCESSADO, objeto=grupo, detalhes={"grupo_id": pk})
         return Response({
             "mensagem": f"Reprocessamento do grupo #{pk} iniciado.",
             "grupo_id": pk,
@@ -366,3 +373,57 @@ class MapaDadosView(View):
                 "total_focos":       focos.count(),
             },
         })
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Auditoria
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AuditoriaSerializer(serializers.ModelSerializer):
+    class Meta:
+        from observacoes.audit import RegistroAuditoria
+        model  = RegistroAuditoria
+        fields = [
+            "id", "timestamp", "tipo_acao",
+            "usuario_str", "ip", "metodo_http", "endpoint",
+            "objeto_tipo", "objeto_id", "detalhes",
+            "sucesso", "mensagem",
+        ]
+
+
+class AuditoriaView(generics.ListAPIView):
+    """
+    GET /api/auditoria/         → lista completa (staff only)
+    GET /api/auditoria/?tipo_acao=LOGIN
+    GET /api/auditoria/?usuario=joao
+    GET /api/auditoria/?objeto_tipo=Observacao
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_serializer_class(self):
+        from rest_framework import serializers as drf_serializers
+        from observacoes.audit import RegistroAuditoria
+
+        class _S(drf_serializers.ModelSerializer):
+            class Meta:
+                model  = RegistroAuditoria
+                fields = [
+                    "id", "timestamp", "tipo_acao",
+                    "usuario_str", "ip", "metodo_http", "endpoint",
+                    "objeto_tipo", "objeto_id", "detalhes",
+                    "sucesso", "mensagem",
+                ]
+        return _S
+
+    def get_queryset(self):
+        from observacoes.audit import RegistroAuditoria
+        qs = RegistroAuditoria.objects.all()
+        p  = self.request.query_params
+        if p.get("tipo_acao"):
+            qs = qs.filter(tipo_acao=p["tipo_acao"])
+        if p.get("usuario"):
+            qs = qs.filter(usuario_str__icontains=p["usuario"])
+        if p.get("objeto_tipo"):
+            qs = qs.filter(objeto_tipo=p["objeto_tipo"])
+        if p.get("sucesso"):
+            qs = qs.filter(sucesso=p["sucesso"].lower() == "true")
+        return qs
