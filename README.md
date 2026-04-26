@@ -297,6 +297,7 @@ curl -X POST https://api.carcara.nupreds.br/auth/google/ \
 
 ```json
 {
+
   "usuario_id":      "user_abc123",
   "timestamp":       "2025-04-21T14:30:00Z",
   "lat":             -3.7172,

@@ -6,6 +6,9 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    PontoDeInteresseViewSet,
+    DetalhesAmbientaisView,
+    AuditoriaView,
     ObservacaoViewSet,
     GrupoViewSet,
     FocoViewSet,
@@ -20,6 +23,7 @@ router.register(r"observacoes", ObservacaoViewSet, basename="observacao")
 router.register(r"grupos",      GrupoViewSet,      basename="grupo")
 router.register(r"focos",       FocoViewSet,       basename="foco")
 router.register(r"relatorios",  RelatorioViewSet,  basename="relatorio")
+router.register(r"pontos-interesse", PontoDeInteresseViewSet, basename="ponto-interesse")
 
 urlpatterns = [
     # API REST
@@ -33,5 +37,10 @@ urlpatterns = [
 
     # Página HTML Leaflet (público)
     path("mapa/", mapa_view, name="mapa"),
+
+    # Auditoria (somente staff)
+    path("api/auditoria/", AuditoriaView.as_view(), name="auditoria"),
+
+    # Detalhes ambientais do foco
+    path("api/focos/<int:foco_id>/ambiente/", DetalhesAmbientaisView.as_view(), name="foco-ambiente"),
 ]
-# Auditoria adicionada manualmente

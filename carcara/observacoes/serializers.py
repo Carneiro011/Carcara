@@ -87,29 +87,27 @@ class ObservacaoSerializer(serializers.ModelSerializer):
 
 
 class FocoEstimadoSerializer(serializers.ModelSerializer):
-
+    """Somente localização e timestamp — métricas ficam no Grupo (diagrama v2)."""
     class Meta:
         model  = FocoEstimado
-        fields = [
-            "id", "grupo_id", "lat_foco", "lon_foco",
-            "distancia_media_m", "residuo_medio_m",
-            "n_observacoes", "nivel_confianca",
-            "distancia_elevacao_m", "calculado_em",
-        ]
+        fields = ["id", "lat", "lon", "calculado_em"]
 
 
 class GrupoSerializer(serializers.ModelSerializer):
     n_observacoes  = serializers.SerializerMethodField()
     n_com_azimute  = serializers.SerializerMethodField()
     severity_label = serializers.SerializerMethodField()
-    foco           = FocoEstimadoSerializer(source="foco_estimado", read_only=True)
+    foco_estimado  = FocoEstimadoSerializer(read_only=True)
 
     class Meta:
         model  = Grupo
         fields = [
-            "id", "status", "criado_em", "atualizado_em",
-            "n_observacoes", "n_com_azimute",
-            "severity_media", "severity_label", "foco",
+            "id", "status", "foco_estimado",
+            "nivel_confianca", "distancia_media_m", "residuo_medio_m",
+            "n_observacoes", "n_com_azimute", "elevacao_distance_m",
+            "severity_media", "severity_label",
+            "dist_pontos_interesse",
+            "criado_em", "atualizado_em",
         ]
 
     def get_n_observacoes(self, obj):
@@ -201,3 +199,27 @@ class ConfiguracaoSistemaSerializer(serializers.ModelSerializer):
                 {"min_obs_alto": "min_obs_alto deve ser >= min_obs_medio."}
             )
         return data
+
+
+class DetalhesAmbientaisSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = None
+        fields = [
+            "id", "foco_id", "altitude_m", "clima", "vegetacao",
+            "velocidade_vento", "direcao_vento", "relevo", "atualizado_em",
+        ]
+    def __init__(self, *args, **kwargs):
+        from observacoes.models import DetalhesAmbientais
+        self.Meta.model = DetalhesAmbientais
+        super().__init__(*args, **kwargs)
+
+
+class PontoDeInteresseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = None
+        fields = ["id", "nome", "descricao", "lat", "lon", "criado_em", "atualizado_em"]
+        read_only_fields = ["id", "criado_em", "atualizado_em"]
+    def __init__(self, *args, **kwargs):
+        from observacoes.models import PontoDeInteresse
+        self.Meta.model = PontoDeInteresse
+        super().__init__(*args, **kwargs)

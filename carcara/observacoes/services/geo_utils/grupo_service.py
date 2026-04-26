@@ -1,23 +1,32 @@
 """
-PROJETO CARCARÁ — Servico de Agrupamento e Processamento de Grupos
+PROJETO CARCARÁ — Serviço de Agrupamento e Processamento
 
-Agrupamento: apenas por proximidade espacial (raio configuravel).
-O criterio temporal foi removido — focos de incendio podem persistir
-por horas ou dias, e a janela de tempo criava falsos negativos.
+Agrupamento: apenas por proximidade espacial (sem critério temporal).
+Após triangulação:
+  - Métricas de confiança salvas no Grupo
+  - FocoEstimado contém apenas lat, lon, calculado_em
+  - Dados ambientais consultados de API externa
+  - Distâncias a pontos de interesse calculadas
 """
 
+import math
 import logging
 
-from observacoes.models import Observacao, Grupo, FocoEstimado, Relatorio
-from observacoes.models import StatusGrupo, ConfiguracaoSistema
+from observacoes.models import (
+    Observacao, Grupo, FocoEstimado, Relatorio,
+    StatusGrupo, ConfiguracaoSistema, DetalhesAmbientais,
+    PontoDeInteresse,
+)
 from observacoes.services.geo_utils.triangulation import preparar_observacoes, triangular
 from observacoes.services.geo_utils.distance_calc import sao_proximas_no_espaco
+from observacoes.services.weather_service import buscar_dados_ambientais
 from observacoes.reports.generate_report import gerar_relatorio, relatorio_para_json
 
 logger = logging.getLogger(__name__)
 
-def _audit_sistema(tipo_acao, objeto=None, objeto_tipo="", objeto_id="", detalhes=None, sucesso=True, mensagem=""):
-    """Registra auditoria sem contexto de request (chamado internamente pelo servico)."""
+
+def _audit_sistema(tipo_acao, objeto=None, objeto_tipo="", objeto_id="",
+                   detalhes=None, sucesso=True, mensagem=""):
     try:
         from observacoes.audit import RegistroAuditoria
         from django.utils import timezone
@@ -36,17 +45,36 @@ def _audit_sistema(tipo_acao, objeto=None, objeto_tipo="", objeto_id="", detalhe
         logger.error("Falha ao registrar auditoria interna: %s", exc)
 
 
+def _distancia_m(lat1, lon1, lat2, lon2) -> float:
+    """Distância em metros entre dois pontos via Haversine."""
+    R = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def _calcular_distancias_pontos(lat_foco: float, lon_foco: float) -> dict:
+    """
+    Calcula a distância do foco a todos os pontos de interesse cadastrados.
+    Retorna {ponto_id: distancia_m}.
+    """
+    resultado = {}
+    for ponto in PontoDeInteresse.objects.all():
+        dist = _distancia_m(lat_foco, lon_foco, ponto.lat, ponto.lon)
+        resultado[str(ponto.pk)] = round(dist, 1)
+    return resultado
+
+
 # =============================================================================
 # AGRUPAMENTO — SOMENTE ESPACIAL
 # =============================================================================
 
 def atribuir_ou_criar_grupo(nova_obs: Observacao) -> Grupo:
     """
-    Atribui a observacao a um grupo espacialmente proximo ou cria um novo.
-
-    Criterio: apenas distancia entre observadores (raio_espacial_km).
-    O criterio temporal foi removido — incendios duram horas/dias e
-    a janela de 30 min descartava observacoes validas de um mesmo foco.
+    Atribui a observação a um grupo espacialmente próximo ou cria um novo.
+    Critério: apenas distância entre observadores (raio_espacial_km).
     """
     config = ConfiguracaoSistema.get()
 
@@ -82,12 +110,13 @@ def atribuir_ou_criar_grupo(nova_obs: Observacao) -> Grupo:
 
 def processar_grupo_async(grupo_id: int):
     """
-    Processa a triangulacao de um grupo de observacoes.
+    Processa triangulação, salva métricas no Grupo, cria FocoEstimado,
+    busca dados ambientais e calcula distâncias a pontos de interesse.
     """
     try:
         grupo = Grupo.objects.get(id=grupo_id)
     except Grupo.DoesNotExist:
-        logger.error("Grupo %s nao encontrado.", grupo_id)
+        logger.error("Grupo %s não encontrado.", grupo_id)
         return
 
     grupo.status = StatusGrupo.PROCESSANDO
@@ -95,7 +124,6 @@ def processar_grupo_async(grupo_id: int):
 
     try:
         observacoes = grupo.observacoes.all()
-
         obs_raw = [
             {
                 "id":              o.id,
@@ -117,19 +145,40 @@ def processar_grupo_async(grupo_id: int):
         obs_processadas = preparar_observacoes(obs_raw)
         resultado = triangular(obs_processadas, config=ConfiguracaoSistema.get())
 
-        FocoEstimado.objects.filter(grupo_id=grupo_id).delete()
-
+        # ── 1. Criar FocoEstimado (só lat, lon, calculado_em) ─────────────────
+        FocoEstimado.objects.filter(grupo=grupo).delete()
         foco = FocoEstimado.objects.create(
-            grupo                = grupo,
-            lat_foco             = resultado.lat_foco,
-            lon_foco             = resultado.lon_foco,
-            distancia_media_m    = resultado.distancia_media_m,
-            residuo_medio_m      = resultado.residuo_medio_m,
-            n_observacoes        = resultado.n_observacoes,
-            nivel_confianca      = resultado.nivel_confianca,
-            distancia_elevacao_m = resultado.distancia_por_elevacao_m,
+            lat = resultado.lat_foco,
+            lon = resultado.lon_foco,
         )
 
+        # ── 2. Salvar métricas de confiança no Grupo ──────────────────────────
+        grupo.foco_estimado      = foco
+        grupo.nivel_confianca    = resultado.nivel_confianca
+        grupo.distancia_media_m  = resultado.distancia_media_m
+        grupo.residuo_medio_m    = resultado.residuo_medio_m
+        grupo.n_observacoes      = resultado.n_observacoes
+        grupo.elevacao_distance_m = resultado.distancia_por_elevacao_m
+
+        # ── 3. Calcular distâncias a pontos de interesse ──────────────────────
+        grupo.dist_pontos_interesse = _calcular_distancias_pontos(
+            resultado.lat_foco, resultado.lon_foco
+        )
+        grupo.status = StatusGrupo.CONCLUIDO
+        grupo.save()
+
+        # ── 4. Buscar dados ambientais (API externa) ──────────────────────────
+        try:
+            dados_amb = buscar_dados_ambientais(resultado.lat_foco, resultado.lon_foco)
+            DetalhesAmbientais.objects.update_or_create(
+                foco=foco,
+                defaults=dados_amb,
+            )
+            logger.info("Dados ambientais obtidos para foco %s", foco.pk)
+        except Exception as exc:
+            logger.warning("Dados ambientais falhou para foco %s: %s", foco.pk, exc)
+
+        # ── 5. Gerar relatório ────────────────────────────────────────────────
         relatorio_dict = gerar_relatorio(
             foco_id                  = foco.id,
             lat_foco                 = resultado.lat_foco,
@@ -143,19 +192,25 @@ def processar_grupo_async(grupo_id: int):
             grupo_id                 = grupo_id,
             obs_raw                  = obs_raw,
         )
-
         Relatorio.objects.create(
             foco          = foco,
             conteudo_json = relatorio_para_json(relatorio_dict),
         )
 
-        grupo.status = StatusGrupo.CONCLUIDO
-        grupo.save()
-        logger.info("Grupo %s processado com sucesso.", grupo_id)
-        _audit_sistema("GRUPO_CONCLUIDO", objeto=grupo, detalhes={"n_obs": foco.n_observacoes, "nivel": foco.nivel_confianca})
+        _audit_sistema(
+            "GRUPO_CONCLUIDO", objeto=grupo,
+            detalhes={
+                "n_obs":   resultado.n_observacoes,
+                "nivel":   resultado.nivel_confianca,
+                "lat_foco": resultado.lat_foco,
+                "lon_foco": resultado.lon_foco,
+                "n_pontos_interesse": len(grupo.dist_pontos_interesse),
+            }
+        )
+        logger.info("Grupo %s processado. Nível: %s", grupo_id, resultado.nivel_confianca)
 
     except Exception as e:
         grupo.status = StatusGrupo.ERRO
         grupo.save()
-        logger.exception("Erro ao processar grupo %s: %s", grupo_id, e)
         _audit_sistema("GRUPO_ERRO", objeto=grupo, sucesso=False, mensagem=str(e))
+        logger.exception("Erro ao processar grupo %s: %s", grupo_id, e)

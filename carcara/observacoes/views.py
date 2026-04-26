@@ -14,10 +14,11 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views import View
 
-from rest_framework import permissions, status, viewsets
+from rest_framework import permissions, status, viewsets, generics, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 
 from .models import (
     Observacao, Grupo, FocoEstimado, Relatorio,
@@ -427,3 +428,46 @@ class AuditoriaView(generics.ListAPIView):
         if p.get("sucesso"):
             qs = qs.filter(sucesso=p["sucesso"].lower() == "true")
         return qs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pontos de Interesse (CRUD — somente staff)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PontoDeInteresseViewSet(viewsets.ModelViewSet):
+    """
+    GET    /api/pontos-interesse/         → listar      [autenticado]
+    POST   /api/pontos-interesse/         → criar       [staff]
+    GET    /api/pontos-interesse/{id}/    → detalhar    [autenticado]
+    PATCH  /api/pontos-interesse/{id}/    → editar      [staff]
+    DELETE /api/pontos-interesse/{id}/    → deletar     [staff]
+    """
+    from observacoes.models import PontoDeInteresse as _P
+    from observacoes.serializers import PontoDeInteresseSerializer as _S
+    queryset         = _P.objects.all()
+    serializer_class = _S
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAdminUser()]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Detalhes Ambientais (leitura — gerado automaticamente)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class DetalhesAmbientaisView(generics.RetrieveAPIView):
+    """
+    GET /api/focos/{foco_id}/ambiente/   → dados ambientais do foco [autenticado]
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        from observacoes.serializers import DetalhesAmbientaisSerializer
+        return DetalhesAmbientaisSerializer
+
+    def get_object(self):
+        from observacoes.models import DetalhesAmbientais
+        from django.shortcuts import get_object_or_404
+        return get_object_or_404(DetalhesAmbientais, foco_id=self.kwargs["foco_id"])
