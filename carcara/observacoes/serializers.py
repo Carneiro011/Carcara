@@ -98,16 +98,26 @@ class GrupoSerializer(serializers.ModelSerializer):
     n_com_azimute  = serializers.SerializerMethodField()
     severity_label = serializers.SerializerMethodField()
     foco_estimado  = FocoEstimadoSerializer(read_only=True)
+    alterado_por   = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model  = Grupo
         fields = [
-            "id", "status", "foco_estimado",
-            "nivel_confianca", "distancia_media_m", "residuo_medio_m",
-            "n_observacoes", "n_com_azimute", "elevacao_distance_m",
-            "severity_media", "severity_label",
+            "id", "status",
+            "foco_estimado",
+            "nivel_confianca",
+            "distancia_media_m",
+            "residuo_medio_m",
+            "n_observacoes",
+            "n_com_azimute",
+            "elevacao_distance_m",
+            "severity_media",
+            "severity_label",
             "dist_pontos_interesse",
-            "criado_em", "atualizado_em",
+            "alterado_por",
+            "observacao_operador",
+            "criado_em",
+            "atualizado_em",
         ]
 
     def get_n_observacoes(self, obj):
@@ -222,4 +232,21 @@ class PontoDeInteresseSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         from observacoes.models import PontoDeInteresse
         self.Meta.model = PontoDeInteresse
+        super().__init__(*args, **kwargs)
+
+
+class AuditoriaSerializer(serializers.ModelSerializer):
+    """Serializer para o histórico de auditoria."""
+    class Meta:
+        model  = None
+        fields = [
+            "id", "timestamp", "tipo_acao",
+            "usuario_str", "ip", "metodo_http", "endpoint",
+            "objeto_tipo", "objeto_id", "detalhes",
+            "sucesso", "mensagem",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        from observacoes.audit import RegistroAuditoria
+        self.Meta.model = RegistroAuditoria
         super().__init__(*args, **kwargs)

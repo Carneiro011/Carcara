@@ -18,10 +18,14 @@ from django.utils import timezone
 # ══════════════════════════════════════════════════════════════════════════════
 
 class StatusGrupo(models.TextChoices):
-    PENDENTE    = "pendente",    "Pendente"
-    PROCESSANDO = "processando", "Processando"
-    CONCLUIDO   = "concluido",   "Concluído"
-    ERRO        = "erro",        "Erro"
+    PENDENTE                = "pendente",                "Pendente"
+    PROCESSANDO             = "processando",             "Processando"
+    AGUARDANDO_CONFIRMACAO  = "aguardando_confirmacao",  "Aguardando Confirmação"
+    CONFIRMADO              = "confirmado",               "Confirmado"
+    EM_CURSO                = "em_curso",                "Em Curso"
+    CONCLUIDO               = "concluido",               "Concluído"
+    FALSO                   = "falso",                   "Falso Alarme"
+    ERRO                    = "erro",                    "Erro"
 
 
 class NivelConfianca(models.TextChoices):
@@ -125,7 +129,7 @@ class Grupo(models.Model):
       - severity_media
     """
     status = models.CharField(
-        max_length=12,
+        max_length=30,
         choices=StatusGrupo.choices,
         default=StatusGrupo.PENDENTE,
     )
@@ -174,6 +178,19 @@ class Grupo(models.Model):
             "Dicionário {ponto_id: distancia_m} com a distância do foco "
             "a cada ponto de interesse cadastrado."
         ),
+    )
+
+    # Quem alterou o status e quando (preenchido pelo operador)
+    alterado_por       = models.ForeignKey(
+        "accounts.Usuario",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="grupos_alterados",
+        help_text="Operador que alterou o status manualmente.",
+    )
+    observacao_operador = models.TextField(
+        blank=True,
+        help_text="Observação do operador ao confirmar, descartar ou concluir.",
     )
 
     criado_em     = models.DateTimeField(default=timezone.now)

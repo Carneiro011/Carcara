@@ -164,7 +164,7 @@ def processar_grupo_async(grupo_id: int):
         grupo.dist_pontos_interesse = _calcular_distancias_pontos(
             resultado.lat_foco, resultado.lon_foco
         )
-        grupo.status = StatusGrupo.CONCLUIDO
+        grupo.status = StatusGrupo.AGUARDANDO_CONFIRMACAO
         grupo.save()
 
         # ── 4. Buscar dados ambientais (API externa) ──────────────────────────
@@ -198,7 +198,7 @@ def processar_grupo_async(grupo_id: int):
         )
 
         _audit_sistema(
-            "GRUPO_CONCLUIDO", objeto=grupo,
+            "GRUPO_CONCLUIDO", objeto=grupo,  # algoritmo concluiu, aguarda operador
             detalhes={
                 "n_obs":   resultado.n_observacoes,
                 "nivel":   resultado.nivel_confianca,

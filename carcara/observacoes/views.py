@@ -9,16 +9,16 @@ Exceções públicas (sem autenticação): MapaDadosView, mapa_view.
 
 import math
 import logging
+import threading
 
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views import View
 
-from rest_framework import permissions, status, viewsets, generics, serializers
+from rest_framework import generics, permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
 
 from .models import (
     Observacao, Grupo, FocoEstimado, Relatorio,
@@ -143,7 +143,11 @@ class ObservacaoViewSet(viewsets.ViewSet):
         )
 
         grupo = atribuir_ou_criar_grupo(obs)
-        processar_grupo_async(grupo.pk)
+        threading.Thread(
+            target=processar_grupo_async,
+            args=(grupo.pk,),
+            daemon=True,
+        ).start()
 
         obs.refresh_from_db()
         logger.info(
@@ -164,9 +168,11 @@ class ObservacaoViewSet(viewsets.ViewSet):
 
 class GrupoViewSet(viewsets.ViewSet):
     """
-    GET  /api/grupos/                  → listar grupos            [autenticado]
-    GET  /api/grupos/{id}/             → detalhar grupo           [autenticado]
-    POST /api/grupos/{id}/processar/   → reprocessar grupo        [somente staff]
+    GET  /api/grupos/                    → listar grupos          [autenticado]
+    GET  /api/grupos/{id}/               → detalhar grupo         [autenticado]
+    GET  /api/grupos/?status=confirmado  → filtrar por status     [autenticado]
+    POST /api/grupos/{id}/status/        → alterar status         [staff/superuser]
+    POST /api/grupos/{id}/processar/     → reprocessar            [staff/superuser]
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -175,9 +181,13 @@ class GrupoViewSet(viewsets.ViewSet):
 
         status_filtro = request.query_params.get("status")
         if status_filtro:
-            if status_filtro not in StatusGrupo.values:
+            valores_validos = StatusGrupo.values
+            if status_filtro not in valores_validos:
                 return Response(
-                    {"detalhe": f"Status inválido: {status_filtro}"},
+                    {
+                        "detalhe": f"Status inválido: '{status_filtro}'.",
+                        "valores_aceitos": valores_validos,
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             qs = qs.filter(status=status_filtro)
@@ -192,6 +202,80 @@ class GrupoViewSet(viewsets.ViewSet):
             pk=pk,
         )
         return Response(GrupoSerializer(grupo).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="status",
+        permission_classes=[_IsStaffOrAdmin],
+    )
+    def alterar_status(self, request, pk=None):
+        """
+        POST /api/grupos/{id}/status/
+        Body: { "status": "confirmado", "observacao": "Foco confirmado por drone" }
+
+        Status válidos para alteração manual:
+          confirmado            → operador validou o foco
+          falso                 → operador descartou como falso alarme
+          em_curso              → brigadistas despachados
+          concluido             → incêndio controlado / encerrado
+
+        Requer is_staff=True (operador da central) ou is_superuser=True.
+        Qualquer transição é permitida — sem restrição de ordem.
+        """
+        grupo = get_object_or_404(Grupo, pk=pk)
+
+        STATUS_MANUAIS = [
+            StatusGrupo.CONFIRMADO,
+            StatusGrupo.FALSO,
+            StatusGrupo.EM_CURSO,
+            StatusGrupo.CONCLUIDO,
+        ]
+
+        novo_status = request.data.get("status", "").lower()
+        if not novo_status:
+            return Response(
+                {"detalhe": "Campo 'status' é obrigatório."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validar se é um status manual válido
+        valores_validos = [s.value for s in STATUS_MANUAIS]
+        if novo_status not in valores_validos:
+            return Response(
+                {
+                    "detalhe": f"Status inválido: '{novo_status}'.",
+                    "valores_aceitos": valores_validos,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        status_anterior = grupo.status
+        grupo.status              = novo_status
+        grupo.alterado_por        = request.user
+        grupo.observacao_operador = request.data.get("observacao", "")
+        grupo.save(update_fields=["status", "alterado_por", "observacao_operador", "atualizado_em"])
+
+        logger.info(
+            "Status do grupo #%s alterado de '%s' para '%s' por %s",
+            pk, status_anterior, novo_status, request.user.username,
+        )
+        registrar_auditoria(
+            request, TipoAcao.OUTRO,
+            objeto=grupo,
+            detalhes={
+                "grupo_id":        pk,
+                "status_anterior": status_anterior,
+                "status_novo":     novo_status,
+                "observacao":      grupo.observacao_operador,
+            },
+        )
+        return Response({
+            "mensagem":        f"Status do grupo #{pk} atualizado.",
+            "status_anterior": status_anterior,
+            "status_novo":     novo_status,
+            "alterado_por":    request.user.username,
+        })
 
     @action(
         detail=True,
@@ -212,7 +296,11 @@ class GrupoViewSet(viewsets.ViewSet):
             )
         grupo.status = StatusGrupo.PENDENTE
         grupo.save(update_fields=["status"])
-        processar_grupo_async(grupo.pk)
+        threading.Thread(
+            target=processar_grupo_async,
+            args=(grupo.pk,),
+            daemon=True,
+        ).start()
         logger.info("Reprocessamento do grupo #%s iniciado por %s", pk, request.user.username)
         registrar_auditoria(request, TipoAcao.GRUPO_REPROCESSADO, objeto=grupo, detalhes={"grupo_id": pk})
         return Response({
@@ -379,18 +467,6 @@ class MapaDadosView(View):
 # Auditoria
 # ══════════════════════════════════════════════════════════════════════════════
 
-class AuditoriaSerializer(serializers.ModelSerializer):
-    class Meta:
-        from observacoes.audit import RegistroAuditoria
-        model  = RegistroAuditoria
-        fields = [
-            "id", "timestamp", "tipo_acao",
-            "usuario_str", "ip", "metodo_http", "endpoint",
-            "objeto_tipo", "objeto_id", "detalhes",
-            "sucesso", "mensagem",
-        ]
-
-
 class AuditoriaView(generics.ListAPIView):
     """
     GET /api/auditoria/         → lista completa (staff only)
@@ -401,19 +477,8 @@ class AuditoriaView(generics.ListAPIView):
     permission_classes = [permissions.IsAdminUser]
 
     def get_serializer_class(self):
-        from rest_framework import serializers as drf_serializers
-        from observacoes.audit import RegistroAuditoria
-
-        class _S(drf_serializers.ModelSerializer):
-            class Meta:
-                model  = RegistroAuditoria
-                fields = [
-                    "id", "timestamp", "tipo_acao",
-                    "usuario_str", "ip", "metodo_http", "endpoint",
-                    "objeto_tipo", "objeto_id", "detalhes",
-                    "sucesso", "mensagem",
-                ]
-        return _S
+        from observacoes.serializers import AuditoriaSerializer
+        return AuditoriaSerializer
 
     def get_queryset(self):
         from observacoes.audit import RegistroAuditoria

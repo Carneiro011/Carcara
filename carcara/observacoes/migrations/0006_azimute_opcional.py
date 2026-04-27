@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("observacoes", "0004_grupo_severity_media"),
+        ("observacoes", "0005_observacao_campos_faltantes"),
     ]
 
     operations = [
