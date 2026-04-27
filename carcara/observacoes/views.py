@@ -134,7 +134,7 @@ class ObservacaoViewSet(viewsets.ViewSet):
             lat             = d["lat"],
             lon             = d["lon"],
             elevacao        = d.get("elevacao"),
-            azimute         = d["azimute"],
+            azimute         = d.get("azimute"),
             precisao_gps    = d.get("precisao_gps"),
             occurrence_type = d.get("occurrence_type"),
             severity_level  = d.get("severity_level"),
@@ -382,26 +382,35 @@ class MapaDadosView(View):
         }
 
         features = []
-        focos = FocoEstimado.objects.select_related("grupo").all()
-        foco_por_grupo = {f.grupo_id: f for f in focos}
 
-        for foco in focos:
-            raio = raio_confianca.get(foco.nivel_confianca, 2000)
+        # Agora FocoEstimado não tem mais grupo_id nem métricas —
+        # essas ficam no Grupo. Fazemos a query pelo Grupo.
+        grupos = Grupo.objects.select_related("foco_estimado").filter(
+            foco_estimado__isnull=False
+        )
+
+        # Mapa grupo_id → foco para lookup rápido nas observações
+        foco_por_grupo = {}
+        for grupo in grupos:
+            foco = grupo.foco_estimado
+            raio = raio_confianca.get(grupo.nivel_confianca or "baixo", 2000)
+            foco_por_grupo[grupo.pk] = foco
             features.append({
                 "type": "Feature",
                 "geometry": {
                     "type": "Point",
-                    "coordinates": [foco.lon_foco, foco.lat_foco],
+                    "coordinates": [foco.lon, foco.lat],
                 },
                 "properties": {
                     "tipo":              "foco",
                     "id":                foco.pk,
-                    "grupo_id":          foco.grupo_id,
-                    "nivel_confianca":   foco.nivel_confianca,
+                    "grupo_id":          grupo.pk,
+                    "status":            grupo.status,
+                    "nivel_confianca":   grupo.nivel_confianca,
                     "raio_m":            raio,
-                    "distancia_media_m": foco.distancia_media_m,
-                    "n_observacoes":     foco.n_observacoes,
-                    "residuo_medio_m":   foco.residuo_medio_m,
+                    "distancia_media_m": grupo.distancia_media_m,
+                    "n_observacoes":     grupo.n_observacoes,
+                    "residuo_medio_m":   grupo.residuo_medio_m,
                     "calculado_em":      foco.calculado_em.isoformat(),
                 },
             })
@@ -412,13 +421,17 @@ class MapaDadosView(View):
             comp_linha = 5000
             if foco:
                 dist = math.sqrt(
-                    ((foco.lat_foco - obs.lat) * 111_000) ** 2
-                    + ((foco.lon_foco - obs.lon) * 111_000
+                    ((foco.lat - obs.lat) * 111_000) ** 2
+                    + ((foco.lon - obs.lon) * 111_000
                        * math.cos(math.radians(obs.lat))) ** 2
                 )
                 comp_linha = min(max(dist * 1.2, 1000), 15_000)
 
-            lat_fim, lon_fim = _ponto_azimute(obs.lat, obs.lon, obs.azimute, comp_linha)
+            lat_fim, lon_fim = _ponto_azimute(
+                obs.lat, obs.lon,
+                obs.azimute if obs.azimute is not None else 0,
+                comp_linha
+            )
 
             features.append({
                 "type": "Feature",
@@ -459,7 +472,7 @@ class MapaDadosView(View):
             "features": features,
             "meta": {
                 "total_observacoes": observacoes.count(),
-                "total_focos":       focos.count(),
+                "total_focos":       grupos.count(),
             },
         })
 
