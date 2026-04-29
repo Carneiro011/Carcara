@@ -25,7 +25,14 @@ class StatusGrupo(models.TextChoices):
     EM_CURSO                = "em_curso",                "Em Curso"
     CONCLUIDO               = "concluido",               "Concluído"
     FALSO                   = "falso",                   "Falso Alarme"
+    QUEIMA_CONTROLADA       = "queima_controlada",       "Queima Controlada"
     ERRO                    = "erro",                    "Erro"
+
+
+class StatusObservacao(models.TextChoices):
+    PENDENTE    = "pendente",    "Pendente"
+    VALIDADA    = "validada",    "Validada"
+    DESCARTADA  = "descartada",  "Descartada"
 
 
 class NivelConfianca(models.TextChoices):
@@ -238,6 +245,23 @@ class Observacao(models.Model):
         help_text="Severidade de 0 (mínimo) a 10 (máximo). 0–3 baixo, 4–6 médio, 7–10 alto.",
     )
     description     = models.TextField(null=True, blank=True)
+    status = models.CharField(
+        max_length=12,
+        choices=StatusObservacao.choices,
+        default=StatusObservacao.PENDENTE,
+        db_index=True,
+    )
+    validado_por = models.ForeignKey(
+        "accounts.Usuario",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="observacoes_validadas",
+        help_text="Operador que validou ou descartou esta observação.",
+    )
+    observacao_validacao = models.TextField(
+        blank=True,
+        help_text="Observação do operador ao validar ou descartar.",
+    )
     criado_em       = models.DateTimeField(default=timezone.now)
 
     grupo = models.ForeignKey(
@@ -303,7 +327,17 @@ class ConfiguracaoSistema(models.Model):
     residuo_alto_m    = models.FloatField(default=500.0)
     dist_media_alto_m = models.FloatField(default=5000.0)
 
-    # ── Confiança MÉDIO ───────────────────────────────────────────────────────
+    # ── Validação de observações ─────────────────────────────────────────────
+    min_obs_validadas_pct = models.FloatField(
+        default=50.0,
+        help_text=(
+            "Porcentagem mínima (0-100) de observações VALIDADAS no grupo "
+            "para promovê-lo automaticamente a CONFIRMADO. "
+            "Ex: 50.0 = pelo menos 50% das observações precisam ser validadas."
+        ),
+    )
+
+    # ── Confiança MÉDIO ───────────────────────────────────────────────────────────
     min_obs_medio    = models.IntegerField(default=2)
     angulo_min_graus = models.FloatField(default=15.0)
     residuo_medio_m  = models.FloatField(default=500.0)

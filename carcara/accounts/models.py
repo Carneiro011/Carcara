@@ -40,8 +40,9 @@ class Usuario(AbstractUser):
     )
 
     class TipoUsuario(models.TextChoices):
-        ADMIN   = "ADMIN",   "Administrador"
-        USUARIO = "USUARIO", "Usuário"
+        ADMIN    = "ADMIN",    "Administrador"
+        OPERADOR = "OPERADOR", "Operador da Central"
+        USUARIO  = "USUARIO",  "Usuário"
 
     tipo_usuario = models.CharField(
         "Tipo de usuário",
@@ -61,4 +62,19 @@ class Usuario(AbstractUser):
     def save(self, *args, **kwargs):
         if self.email:
             self.email = self.email.lower().strip()
+
+        # Sincroniza tipo_usuario com is_staff e is_superuser
+        # ADMIN    → is_staff=True  + is_superuser=True
+        # OPERADOR → is_staff=True  + is_superuser=False
+        # USUARIO  → is_staff=False + is_superuser=False
+        if self.tipo_usuario == self.TipoUsuario.ADMIN:
+            self.is_staff      = True
+            self.is_superuser  = True
+        elif self.tipo_usuario == self.TipoUsuario.OPERADOR:
+            self.is_staff      = True
+            self.is_superuser  = False
+        else:
+            self.is_staff      = False
+            self.is_superuser  = False
+
         super().save(*args, **kwargs)
