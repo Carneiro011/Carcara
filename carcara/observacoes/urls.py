@@ -9,6 +9,8 @@ from .views import (
     PontoDeInteresseViewSet,
     DetalhesAmbientaisView,
     AuditoriaView,
+    ValidacaoObservacaoView,
+    MoverObservacaoView,
     ObservacaoViewSet,
     GrupoViewSet,
     FocoViewSet,
@@ -40,6 +42,10 @@ urlpatterns = [
 
     # Auditoria (somente staff)
     path("api/auditoria/", AuditoriaView.as_view(), name="auditoria"),
+
+    # Validação de observações (operador)
+    path("api/observacoes/<int:obs_id>/validar/", ValidacaoObservacaoView.as_view(), name="validar-observacao"),
+    path("api/observacoes/<int:obs_id>/mover/",   MoverObservacaoView.as_view(),   name="mover-observacao"),
 
     # Detalhes ambientais do foco
     path("api/focos/<int:foco_id>/ambiente/", DetalhesAmbientaisView.as_view(), name="foco-ambiente"),

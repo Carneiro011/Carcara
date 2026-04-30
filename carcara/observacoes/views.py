@@ -32,6 +32,7 @@ from .serializers import (
     RelatorioSerializer,
     ConfiguracaoSistemaSerializer,
 )
+from observacoes.services.validacao_service import avaliar_grupo_apos_validacao
 from observacoes.services.geo_utils.grupo_service import (
     atribuir_ou_criar_grupo,
     processar_grupo_async,
@@ -134,7 +135,7 @@ class ObservacaoViewSet(viewsets.ViewSet):
             lat             = d["lat"],
             lon             = d["lon"],
             elevacao        = d.get("elevacao"),
-            azimute         = d.get("azimute"),
+            azimute         = d.get("azimute"),   # opcional: None se sem bússola
             precisao_gps    = d.get("precisao_gps"),
             occurrence_type = d.get("occurrence_type"),
             severity_level  = d.get("severity_level"),
@@ -474,6 +475,217 @@ class MapaDadosView(View):
                 "total_observacoes": observacoes.count(),
                 "total_focos":       grupos.count(),
             },
+        })
+
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Mover / Desagrupar Observação (operador)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class MoverObservacaoView(APIView):
+    """
+    POST /api/observacoes/{id}/mover/
+
+    Opção A — Mover para grupo existente:
+        Body: { "grupo_id": 3 }
+
+    Opção B — Desagrupar (cria novo grupo só com essa observação):
+        Body: { "desagrupar": true }
+
+    Em ambos os casos:
+      - Observação volta para status PENDENTE
+      - Grupo de origem reprocessa (perdeu uma observação)
+      - Grupo de destino reprocessa (ganhou uma observação)
+      - Novo grupo criado em PENDENTE (opção B)
+
+    Requer is_staff=True (operador da central) ou is_superuser=True.
+    """
+    permission_classes = [_IsStaffOrAdmin]
+
+    def post(self, request, obs_id):
+        obs = get_object_or_404(Observacao, pk=obs_id)
+
+        desagrupar  = request.data.get("desagrupar", False)
+        novo_grp_id = request.data.get("grupo_id")
+
+        if not desagrupar and not novo_grp_id:
+            return Response(
+                {
+                    "detalhe": "Informe 'grupo_id' para mover ou 'desagrupar: true' para criar novo grupo.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        grupo_origem = obs.grupo
+        grupo_origem_id = grupo_origem.pk if grupo_origem else None
+
+        # ── Opção B: desagrupar ───────────────────────────────────────────────
+        if desagrupar:
+            novo_grupo = Grupo.objects.create()
+            obs.grupo  = novo_grupo
+            obs.status = "pendente"
+            obs.save(update_fields=["grupo", "status"])
+
+            logger.info(
+                "Obs #%s desagrupada do grupo #%s → novo grupo #%s por %s",
+                obs.pk, grupo_origem_id, novo_grupo.pk, request.user.username,
+            )
+            registrar_auditoria(
+                request, TipoAcao.OUTRO, objeto=obs,
+                detalhes={
+                    "acao":            "desagrupar",
+                    "grupo_origem_id": grupo_origem_id,
+                    "grupo_novo_id":   novo_grupo.pk,
+                },
+            )
+
+            # Reprocessar grupo de origem se ainda tiver observações
+            if grupo_origem and grupo_origem.observacoes.exists():
+                threading.Thread(
+                    target=processar_grupo_async,
+                    args=(grupo_origem.pk,),
+                    daemon=True,
+                ).start()
+            elif grupo_origem:
+                # Grupo ficou vazio — marcar como erro
+                grupo_origem.status = StatusGrupo.ERRO
+                grupo_origem.save(update_fields=["status"])
+
+            return Response({
+                "mensagem":        f"Observação #{obs.pk} desagrupada com sucesso.",
+                "obs_id":          obs.pk,
+                "grupo_origem_id": grupo_origem_id,
+                "grupo_novo_id":   novo_grupo.pk,
+                "obs_status":      "pendente",
+            }, status=status.HTTP_201_CREATED)
+
+        # ── Opção A: mover para grupo existente ───────────────────────────────
+        grupo_destino = get_object_or_404(Grupo, pk=novo_grp_id)
+
+        if grupo_destino.pk == grupo_origem_id:
+            return Response(
+                {"detalhe": "A observação já pertence a este grupo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        obs.grupo  = grupo_destino
+        obs.status = "pendente"
+        obs.save(update_fields=["grupo", "status"])
+
+        logger.info(
+            "Obs #%s movida do grupo #%s → grupo #%s por %s",
+            obs.pk, grupo_origem_id, grupo_destino.pk, request.user.username,
+        )
+        registrar_auditoria(
+            request, TipoAcao.OUTRO, objeto=obs,
+            detalhes={
+                "acao":              "mover",
+                "grupo_origem_id":   grupo_origem_id,
+                "grupo_destino_id":  grupo_destino.pk,
+            },
+        )
+
+        # Reprocessar grupo de origem
+        if grupo_origem and grupo_origem.observacoes.exists():
+            threading.Thread(
+                target=processar_grupo_async,
+                args=(grupo_origem.pk,),
+                daemon=True,
+            ).start()
+        elif grupo_origem:
+            grupo_origem.status = StatusGrupo.ERRO
+            grupo_origem.save(update_fields=["status"])
+
+        # Reprocessar grupo de destino
+        threading.Thread(
+            target=processar_grupo_async,
+            args=(grupo_destino.pk,),
+            daemon=True,
+        ).start()
+
+        return Response({
+            "mensagem":          f"Observação #{obs.pk} movida com sucesso.",
+            "obs_id":            obs.pk,
+            "grupo_origem_id":   grupo_origem_id,
+            "grupo_destino_id":  grupo_destino.pk,
+            "obs_status":        "pendente",
+        })
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validação de Observações (operador)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ValidacaoObservacaoView(APIView):
+    """
+    POST /api/observacoes/{id}/validar/
+    Body: {
+        "status": "validada" | "descartada",
+        "observacao": "motivo opcional"
+    }
+
+    Valida ou descarta uma observação individualmente.
+    Após cada validação, reavalia automaticamente o status do grupo:
+      - Se % de validadas >= min_obs_validadas_pct → grupo → CONFIRMADO
+      - Se todas descartadas → grupo → FALSO
+      - Se ficou abaixo do mínimo → grupo → AGUARDANDO_CONFIRMACAO
+    """
+    permission_classes = [_IsStaffOrAdmin]
+
+    def post(self, request, obs_id):
+        obs = get_object_or_404(Observacao, pk=obs_id)
+
+        novo_status = request.data.get("status", "").lower()
+        if novo_status not in ["validada", "descartada"]:
+            return Response(
+                {
+                    "detalhe": "Status inválido.",
+                    "valores_aceitos": ["validada", "descartada"],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        status_anterior = obs.status
+        obs.status               = novo_status
+        obs.validado_por         = request.user
+        obs.observacao_validacao = request.data.get("observacao", "")
+        obs.save(update_fields=["status", "validado_por", "observacao_validacao"])
+
+        logger.info(
+            "Obs #%s: %s → %s por %s",
+            obs.pk, status_anterior, novo_status, request.user.username,
+        )
+        registrar_auditoria(
+            request, TipoAcao.OUTRO,
+            objeto=obs,
+            detalhes={
+                "status_anterior":   status_anterior,
+                "status_novo":       novo_status,
+                "observacao":        obs.observacao_validacao,
+                "grupo_id":          obs.grupo_id,
+            },
+        )
+
+        # Reavaliar grupo automaticamente
+        grupo_status_anterior = None
+        grupo_status_novo = None
+        if obs.grupo:
+            grupo_status_anterior = obs.grupo.status
+            avaliar_grupo_apos_validacao(obs.grupo)
+            obs.grupo.refresh_from_db()
+            grupo_status_novo = obs.grupo.status
+
+        return Response({
+            "mensagem":          f"Observação #{obs.pk} marcada como '{novo_status}'.",
+            "obs_id":            obs.pk,
+            "status_obs":        novo_status,
+            "validado_por":      request.user.username,
+            "grupo_id":          obs.grupo_id,
+            "grupo_status_anterior": grupo_status_anterior,
+            "grupo_status_novo": grupo_status_novo,
+            "grupo_promovido":   grupo_status_anterior != grupo_status_novo,
         })
 
 # ══════════════════════════════════════════════════════════════════════════════
