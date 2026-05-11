@@ -15,6 +15,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views import View
 
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework import generics, permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -140,7 +141,7 @@ class ObservacaoViewSet(viewsets.ViewSet):
             occurrence_type = d.get("occurrence_type"),
             severity_level  = d.get("severity_level"),
             description     = d.get("description", ""),
-            foto_url        = d.get("photo_url"),
+            foto            = d.get("foto"),
         )
 
         grupo = atribuir_ou_criar_grupo(obs)
@@ -449,7 +450,7 @@ class MapaDadosView(View):
                     "descricao":       obs.description,
                     "timestamp":       obs.timestamp.isoformat(),
                     "grupo_id":        obs.grupo_id,
-                    "foto_url":        obs.foto_url,
+                    "foto": obs.foto.url if obs.foto else None,
                 },
             })
 

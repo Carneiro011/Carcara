@@ -133,7 +133,7 @@ def processar_grupo_async(grupo_id: int):
                 "azimute":         o.azimute,
                 "elevacao":        o.elevacao,
                 "precisao_gps":    o.precisao_gps,
-                "foto_url":        o.foto_url,
+                "foto": o.foto.name if o.foto else None,
                 "descricao":       o.description,
                 "tipo_ocorrencia": o.occurrence_type,
                 "severidade":      o.severity_level,

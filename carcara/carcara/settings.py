@@ -224,3 +224,7 @@ LOGGING = {
         },
     },
 }
+
+# ── Media (upload de imagens) ─────────────────────────────────────────────────
+MEDIA_URL  = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"

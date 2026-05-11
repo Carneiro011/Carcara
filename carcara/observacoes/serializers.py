@@ -43,8 +43,7 @@ class ObservacaoInputSerializer(serializers.Serializer):
                                              min_value=0)
     timestamp       = serializers.DateTimeField()
     usuario_id      = serializers.CharField(min_length=1, max_length=64)
-    foto_url        = serializers.URLField(required=False, allow_null=True,
-                                           max_length=512)
+    foto            = serializers.ImageField(required=False, allow_null=True)
     occurrence_type = serializers.ChoiceField(
         choices=["fogo", "fumaca"],
         required=False, allow_null=True,
@@ -77,7 +76,7 @@ class ObservacaoSerializer(serializers.ModelSerializer):
             "id", "usuario_id", "lat", "lon",
             "azimute", "tem_azimute",
             "elevacao", "precisao_gps", "timestamp",
-            "foto_url", "occurrence_type",
+            "foto", "occurrence_type",
             "severity_level", "severity_label",
             "description", "grupo_id", "criado_em",
         ]

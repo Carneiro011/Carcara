@@ -234,7 +234,11 @@ class Observacao(models.Model):
     azimute         = models.FloatField(null=True, blank=True)   # graus 0–360 (opcional)
     elevacao        = models.FloatField(null=True, blank=True)   # pitch graus 0–90 (não é altitude)
     precisao_gps    = models.FloatField(null=True, blank=True)   # metros
-    foto_url        = models.URLField(max_length=512, null=True, blank=True)
+    foto = models.ImageField(
+        upload_to="observacoes/fotos/%Y/%m/",
+        null=True, blank=True,
+        help_text="Foto da observacao enviada pelo app mobile.",
+    )
     occurrence_type = models.CharField(
         max_length=6,
         choices=TipoOcorrencia.choices,
