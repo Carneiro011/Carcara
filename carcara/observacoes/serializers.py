@@ -76,13 +76,30 @@ class ObservacaoSerializer(serializers.ModelSerializer):
             "id", "usuario_id", "lat", "lon",
             "azimute", "tem_azimute",
             "elevacao", "precisao_gps", "timestamp",
-            "foto", "occurrence_type",
+            "foto", "foto", "foto_url", "occurrence_type",
             "severity_level", "severity_label",
             "description", "grupo_id", "criado_em",
         ]
 
     def get_tem_azimute(self, obj):
         return obj.azimute is not None
+
+    def get_foto_url(self, obj):
+        if not obj.foto:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.foto.url)
+        return obj.foto.url
+
+    def get_foto_url(self, obj):
+        """URL completa da foto — pronta para uso no app mobile."""
+        if not obj.foto:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.foto.url)
+        return obj.foto.url
 
 
 class FocoEstimadoSerializer(serializers.ModelSerializer):

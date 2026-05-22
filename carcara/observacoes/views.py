@@ -108,11 +108,11 @@ class ObservacaoViewSet(viewsets.ViewSet):
 
         limite = min(int(request.query_params.get("limite", 50)), 500)
         qs = qs[:limite]
-        return Response(ObservacaoSerializer(qs, many=True).data)
+        return Response(ObservacaoSerializer(qs, many=True, context={'request': request}).data)
 
     def retrieve(self, request, pk=None):
         obs = get_object_or_404(Observacao, pk=pk)
-        return Response(ObservacaoSerializer(obs).data)
+        return Response(ObservacaoSerializer(obs, context={'request': request}).data)
 
     def create(self, request):
         """
@@ -141,7 +141,7 @@ class ObservacaoViewSet(viewsets.ViewSet):
             occurrence_type = d.get("occurrence_type"),
             severity_level  = d.get("severity_level"),
             description     = d.get("description", ""),
-            foto            = d.get("foto"),
+            foto_url        = d.get("foto"),
         )
 
         grupo = atribuir_ou_criar_grupo(obs)
